@@ -1,8 +1,13 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     kotlin("android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+val signingPropertiesFile = file(System.getenv("HIBI_SIGNING_PROPERTIES") ?: "${System.getProperty("user.home")}/.ivy/secrets/Hibi/signing.properties")
+val signingProperties = Properties().apply { if (signingPropertiesFile.isFile) signingPropertiesFile.inputStream().use(::load) }
+val signingReady = listOf("storeFile", "storePassword", "keyAlias", "keyPassword").all { !signingProperties.getProperty(it).isNullOrBlank() }
 android {
     namespace = "org.lvl3.hibi"
     compileSdk = 36
@@ -10,9 +15,19 @@ android {
         applicationId = "org.lvl3.hibi"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    signingConfigs {
+        create("hibiRelease") {
+            if (signingReady) {
+                storeFile = file(signingProperties.getProperty("storeFile"))
+                storePassword = signingProperties.getProperty("storePassword")
+                keyAlias = signingProperties.getProperty("keyAlias")
+                keyPassword = signingProperties.getProperty("keyPassword")
+            }
+        }
     }
     buildTypes {
         debug {
@@ -22,18 +37,19 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            // The initial sideload build uses this host's development certificate.
-            // Configure a personal signing key before distributing release updates.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("hibiRelease")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+}
+tasks.matching { it.name == "validateSigningRelease" || it.name == "packageRelease" }.configureEach {
+    doFirst { check(signingReady) { "Configure HIBI_SIGNING_PROPERTIES with an external release keystore before building a release. See README." } }
 }
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
 dependencies {

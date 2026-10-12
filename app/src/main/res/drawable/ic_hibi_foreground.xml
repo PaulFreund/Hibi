@@ -1,0 +1,4 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:strokeColor="@color/hibi_surface" android:strokeWidth="5" android:strokeLineCap="round" android:fillColor="@android:color/transparent" android:pathData="M34,34v40 M74,34v40 M34,54h40" />
+    <path android:fillColor="@color/hibi_accent_soft" android:pathData="M50,27a4,4 0,1 0,8 0a4,4 0,1 0,-8 0" />
+</vector>

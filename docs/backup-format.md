@@ -20,10 +20,10 @@ Ein Manifest-Eintrag enthält `id`, `day`, `createdAt`, `updatedAt`, `markdownFi
 
 - Höchstens 20.000 Einträge, 100.000 Archivdateien und 20 GiB unkomprimierte Inhalte.
 - Einzeldateien höchstens 512 MiB; Markdown höchstens 2 MiB und Manifest höchstens 8 MiB.
-- Unterstützte Originalformate: JPEG, PNG, WebP, GIF, HEIC/HEIF und AVIF, soweit die Android-Version sie dekodieren kann. Animierte Bilder werden im Feed als Standbild dargestellt.
+- Originalformate im Vertrag: JPEG, PNG, WebP, GIF, HEIC/HEIF und AVIF. Neue Fotos benötigen einen Decoder des Geräts. Beim Wiederherstellen bleiben auch auf diesem Gerät nicht darstellbare Originale erhalten. Animierte Bilder werden im Feed als Standbild dargestellt.
 - Die Quellansicht zeigt Bilder vollständig. Extreme Seitenverhältnisse außerhalb 1:4 bis 4:1 nutzen einen begrenzten Rahmen mit Leerraum.
 - Absolute Pfade, `..`, Windows-Trenner, Symlinks, doppelte Dateinamen/IDs, unerwartete Dateien, fehlende Originale und abweichende Prüfsummen werden verworfen.
-- Android prüft zusätzlich den tatsächlichen Bildtyp und die EXIF-korrigierten Abmessungen.
+- Android vergleicht zusätzlich Bildtyp und EXIF-korrigierte Abmessungen. Decoderfehler oder abweichende Metadaten erzeugen Hinweise in der Vorschau, statt andere Einträge zu blockieren; Dateibytes und SHA-256 bleiben unverändert.
 - Datumswerte liegen im kanonischen ISO-Format zwischen `0001-01-01` und `9999-12-31`.
 - Alle Dateien werden zunächst in ein privates Staging-Verzeichnis gelesen. Fehler verhindern die Übernahme. Neue Originale werden vor dem gemeinsamen SQLite-Commit gespeichert; bei einem fehlgeschlagenen Commit werden neu angelegte Bilder wieder entfernt.
 

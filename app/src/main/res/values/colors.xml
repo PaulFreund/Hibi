@@ -2,9 +2,20 @@
     <!-- The palette lives here; Compose, platform chrome and the offline editor share it. -->
     <color name="hibi_background">#F8F4EE</color>
     <color name="hibi_surface">#FFFDF9</color>
-    <color name="hibi_accent">#B7664D</color>
+    <color name="hibi_accent">#974B36</color>
     <color name="hibi_accent_soft">#F1E0D6</color>
     <color name="hibi_ink">#35463E</color>
-    <color name="hibi_muted">#69776E</color>
-    <color name="hibi_outline">#DDDCD3</color>
+    <color name="hibi_muted">#56635B</color>
+    <color name="hibi_outline">#707B73</color>
+    <color name="hibi_outline_soft">#DDDCD3</color>
+    <color name="hibi_surface_low">#FCF8F2</color>
+    <color name="hibi_surface_high">#EDE8DF</color>
+    <color name="hibi_surface_highest">#E3DED4</color>
+    <color name="hibi_inverse_surface">#35463E</color>
+    <color name="hibi_inverse_ink">#FFFDF9</color>
+    <color name="hibi_secondary">#52665B</color>
+    <color name="hibi_secondary_soft">#E2E9E2</color>
+    <color name="hibi_error">#A9322A</color>
+    <color name="hibi_error_soft">#F9DFD9</color>
+    <color name="hibi_scrim">#000000</color>
 </resources>

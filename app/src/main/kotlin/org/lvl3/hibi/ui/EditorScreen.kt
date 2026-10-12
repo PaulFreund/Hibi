@@ -2,9 +2,6 @@
 package org.lvl3.hibi.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -27,42 +24,45 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 
 @Composable
-fun EditorScreen(draft: Entry, vm: DiaryViewModel, modifier: Modifier) {
-    val controller = remember(draft.id) { EditorController() }
+fun EditorScreen(draft: Entry, vm: DiaryViewModel, modifier: Modifier, pickPhotos: () -> Unit) {
+    val state by vm.state.collectAsState()
+    val editing = state.entries.any { it.id == draft.id }
+    val controller = remember(draft.id) { EditorController().apply { latest = draft.markdown } }
+    var reading by remember(draft.id) { mutableStateOf(false) }
     var datePicker by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var discard by remember { mutableStateOf(false) }
-    val images = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(50), vm::addPhotos)
-    fun close() { controller.read { text -> vm.updateDraft { it.copy(markdown = text) }; vm.closeEditor() } }
-    BackHandler { close() }
+    fun read(action: (String) -> Unit) {
+        if (reading || state.busy) return
+        reading = true
+        controller.read { text -> reading = false; if (vm.state.value.draft?.id == draft.id) action(text) }
+    }
+    fun close() { read { text -> vm.updateDraft { it.copy(markdown = text) }; vm.closeEditor() } }
+    BackHandler { if (!state.busy) close() }
     Column(modifier.fillMaxSize().imePadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { close() }) { Icon(Icons.Outlined.ArrowBack, "Entwurf schließen") }
-            Text("Dein Moment", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+            IconButton(onClick = { close() }, enabled = !state.busy && !reading) { Icon(Icons.Outlined.ArrowBack, "Entwurf schließen") }
+            Text(if (editing) "Eintrag bearbeiten" else "Neuer Eintrag", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Entwurf-Optionen") }
                 DropdownMenu(menu, { menu = false }) {
                     DropdownMenuItem(text = { Text("Entwurf verwerfen") }, onClick = { menu = false; discard = true })
                 }
             }
-            Button(onClick = { controller.read(vm::saveDraft) }, enabled = draft.markdown.isNotBlank() || draft.photos.isNotEmpty()) { Text("Speichern") }
+            Button(onClick = { read(vm::saveDraft) }, enabled = controller.ready && !reading && !state.busy && (draft.markdown.isNotBlank() || draft.photos.isNotEmpty())) { Text("Speichern") }
         }
         HorizontalDivider()
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(HibiDesign.pagePadding), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Datum", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TextButton(onClick = { datePicker = true }, contentPadding = PaddingValues(0.dp)) { Text(prettyDate(draft.day)) }
-                }
-                IconButton(onClick = { datePicker = true }) { Icon(Icons.Outlined.DateRange, "Datum wählen") }
-            }
-            if (draft.photos.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = HibiDesign.pagePadding), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.DateRange, null, Modifier.size(18.dp))
+            TextButton(onClick = { datePicker = true }, enabled = !state.busy) { Text(prettyDate(draft.day), style = MaterialTheme.typography.bodyMedium) }
+        }
+        LazyRow(contentPadding = PaddingValues(horizontal = HibiDesign.pagePadding, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 itemsIndexed(draft.photos, key = { _, photo -> photo.id }) { index, photo ->
                     var photoMenu by remember { mutableStateOf(false) }
-                    Column(Modifier.width(112.dp)) {
-                        PhotoImage(vm.mediaFile(photo), photo, Modifier.size(112.dp), description = "Foto ${index + 1}")
+                    Column(Modifier.width(80.dp)) {
+                        PhotoImage(vm.mediaFile(photo), photo, Modifier.size(80.dp), description = "Foto ${index + 1}${if (index == 0) ", Titelbild" else ""}")
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("${index + 1}", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                            Text(if (index == 0) "Titelbild" else "${index + 1}", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall)
                             Box {
                                 IconButton(onClick = { photoMenu = true }) { Icon(Icons.Outlined.MoreVert, "Foto ${index + 1} bearbeiten") }
                                 DropdownMenu(photoMenu, { photoMenu = false }) {
@@ -81,16 +81,14 @@ fun EditorScreen(draft: Entry, vm: DiaryViewModel, modifier: Modifier) {
                         }
                     }
                 }
+            item(key = "add-photo") {
+                OutlinedButton(onClick = pickPhotos, enabled = !state.busy, modifier = Modifier.height(if (draft.photos.isEmpty()) 44.dp else 80.dp)) {
+                    Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(6.dp)); Text("Fotos hinzufügen")
+                }
             }
-            OutlinedButton(onClick = { images.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(8.dp)); Text("Fotos hinzufügen")
-            }
-            Text("Deine Worte", style = MaterialTheme.typography.titleMedium)
-            Surface(shape = MaterialTheme.shapes.medium) {
-                MarkdownEditor(draft.id, draft.markdown, controller, Modifier.fillMaxWidth().height(440.dp)) { text -> vm.updateDraft { it.copy(markdown = text) } }
-            }
-            Text("Entwürfe werden lokal gespeichert. Mit Speichern erscheint dein Eintrag im Tagebuch.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if (!controller.ready && controller.failure == null) Text("Schreibbereich wird geladen · Entwurf bleibt erhalten", Modifier.padding(horizontal = HibiDesign.pagePadding), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        MarkdownEditor(draft.id, draft.markdown, controller, Modifier.fillMaxWidth().weight(1f)) { text -> vm.updateDraft { it.copy(markdown = text) } }
     }
     if (datePicker) {
         val picker = rememberDatePickerState(initialSelectedDateMillis = LocalDate.parse(draft.day).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(), yearRange = 1..9999)
@@ -113,7 +111,7 @@ fun DetailDialog(entry: Entry, vm: DiaryViewModel, close: () -> Unit, edit: () -
             Column(Modifier.systemBarsPadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = close) { Icon(Icons.Outlined.Close, "Eintrag schließen") }
-                    Text("Erinnerung", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                    Text("Eintrag", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
                     IconButton(onClick = edit) { Icon(Icons.Outlined.Edit, "Eintrag bearbeiten") }
                     IconButton(onClick = { delete = true }) { Icon(Icons.Outlined.Delete, "Eintrag löschen") }
                 }

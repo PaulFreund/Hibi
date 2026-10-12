@@ -7,6 +7,15 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
+import kotlinx.coroutines.delay
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -46,8 +55,16 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-fun prettyDate(day: String): String = LocalDate.parse(day).format(DateTimeFormatter.ofPattern("EEEE, d. MMMM yyyy", Locale.GERMAN))
-fun exportDate(time: Long?): String = time?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("d. MMM yyyy, HH:mm", Locale.GERMAN)) } ?: "Noch kein Export"
+private val fullDateFormat = DateTimeFormatter.ofPattern("EEEE, d. MMMM yyyy", Locale.GERMAN)
+private val shortDateFormat = DateTimeFormatter.ofPattern("d. MMMM", Locale.GERMAN)
+private val exportDateFormat = DateTimeFormatter.ofPattern("d. MMM yyyy, HH:mm", Locale.GERMAN)
+fun prettyDate(day: String): String = LocalDate.parse(day).format(fullDateFormat)
+fun feedDate(day: String): String {
+    val date = LocalDate.parse(day); val today = LocalDate.now()
+    val relative = when (date) { today -> "Heute · "; today.minusDays(1) -> "Gestern · "; else -> "" }
+    return relative + date.format(shortDateFormat) + if (date.year != today.year) " ${date.year}" else ""
+}
+fun exportDate(time: Long?): String = time?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).format(exportDateFormat) } ?: "Noch kein Export"
 
 @Composable
 fun HibiApp(vm: DiaryViewModel = viewModel()) {
@@ -69,17 +86,28 @@ fun HibiApp(vm: DiaryViewModel = viewModel()) {
     var detailId by rememberSaveable { mutableStateOf<String?>(null) }
     var exportDialog by rememberSaveable { mutableStateOf(false) }
     var importUri by rememberSaveable { mutableStateOf<String?>(null) }
-    var saveExportPath by rememberSaveable { mutableStateOf<String?>(null) }
+    val feedScroll = rememberLazyListState()
+    var scrollSignature by rememberSaveable { mutableStateOf<String?>(null) }
+    var showOperation by remember { mutableStateOf(false) }
+    val images = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(50), vm::addPhotos)
     val openZip = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             importUri = uri.toString()
+            vm.clearImportError()
         }
     }
-    val saveZip = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        val file = saveExportPath?.let(::File)
-        if (uri != null && file?.isFile == true) vm.saveExport(uri, file)
-        saveExportPath = null
+    val saveZip = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip"), vm::saveExport)
+    LaunchedEffect(state.operation) { showOperation = false; if (state.operation != null) { delay(300); showOperation = true } }
+    LaunchedEffect(state.prepared) { if (state.prepared != null) importUri = null }
+    val display = remember(state.entries, state.preferences.newestFirst, filterDay, query) {
+        state.entries.filter { (filterDay == null || it.day == filterDay) && (query.isBlank() || it.markdown.contains(query, true) || it.day.contains(query, true) || prettyDate(it.day).contains(query, true)) }.let { if (state.preferences.newestFirst) it.reversed() else it }
+    }
+    val signature = "${state.preferences.newestFirst}|$filterDay|$query|${display.size}|${display.firstOrNull()?.id}|${display.lastOrNull()?.id}"
+    LaunchedEffect(signature, state.loaded) {
+        if (state.loaded && scrollSignature != signature) {
+            if (display.isNotEmpty()) feedScroll.scrollToItem(if (state.preferences.newestFirst) 0 else display.lastIndex)
+            scrollSignature = signature
+        }
     }
     LaunchedEffect(state.message) {
         state.message?.let { snackbar.showSnackbar(it); vm.clearMessage() }
@@ -88,24 +116,22 @@ fun HibiApp(vm: DiaryViewModel = viewModel()) {
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background, snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            if (!state.editorOpen) Column(Modifier.statusBarsPadding().padding(horizontal = HibiDesign.pagePadding, vertical = 10.dp)) {
+            if (state.loaded && !state.editorOpen) Column(Modifier.statusBarsPadding().padding(horizontal = HibiDesign.pagePadding, vertical = 8.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     if (settings) IconButton(onClick = { settings = false }) { Icon(Icons.Outlined.ArrowBack, "Zum Tagebuch") }
-                    Text(if (settings) "Einstellungen" else "Hibi", Modifier.weight(1f).clickable { settings = false; filterDay = null; query = "" }, style = MaterialTheme.typography.headlineLarge)
-                    if (!settings) Icon(Icons.Outlined.FavoriteBorder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(26.dp))
+                    Text(if (settings) "Einstellungen" else "Hibi", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
                 }
-                if (!settings) Text("Deine Tage, in Bildern und Worten.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
         bottomBar = {
-            if (state.preferences.initialized && !state.editorOpen && !state.fatal) {
+            if (state.loaded && state.preferences.initialized && !state.editorOpen && !state.fatal) {
                 Column {
                     HorizontalDivider()
                     NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                        NavigationBarItem(selected = calendar, onClick = { calendar = true; settings = false }, icon = { Icon(Icons.Outlined.DateRange, "Kalender öffnen") }, label = { Text("Kalender") })
-                        NavigationBarItem(selected = search, onClick = { search = true; settings = false }, icon = { Icon(Icons.Outlined.Search, "Suche öffnen") }, label = { Text("Suche") })
-                        NavigationBarItem(selected = false, onClick = { vm.openEditor(filterDay?.let { Entry(day = it) }) }, icon = { Icon(Icons.Outlined.AddCircle, "Eintrag erstellen", tint = MaterialTheme.colorScheme.primary) }, label = { Text("Eintrag") })
-                        NavigationBarItem(selected = settings, onClick = { settings = !settings }, icon = { Icon(Icons.Outlined.Settings, "Einstellungen öffnen") }, label = { Text("Optionen") })
+                        NavigationBarItem(selected = calendar, enabled = !state.busy, onClick = { calendar = true; settings = false }, icon = { Icon(Icons.Outlined.DateRange, null) }, label = { Text("Kalender") })
+                        NavigationBarItem(selected = search, enabled = !state.busy, onClick = { search = true; settings = false }, icon = { Icon(Icons.Outlined.Search, null) }, label = { Text("Suche") })
+                        NavigationBarItem(selected = false, enabled = !state.busy, onClick = { vm.newEntry(filterDay) }, icon = { Icon(Icons.Outlined.AddCircle, null, tint = MaterialTheme.colorScheme.primary) }, label = { Text("Eintrag") })
+                        NavigationBarItem(selected = settings, enabled = !state.busy, onClick = { settings = !settings }, icon = { Icon(Icons.Outlined.Settings, null) }, label = { Text("Optionen") })
                     }
                 }
             }
@@ -116,12 +142,12 @@ fun HibiApp(vm: DiaryViewModel = viewModel()) {
                 Text("Deine lokalen Daten werden nicht ersetzt. Bitte versuche es erneut.")
                 Button(onClick = { vm.load() }) { Text("Erneut versuchen") }
             }
-            state.editorOpen && state.draft != null -> EditorScreen(state.draft!!, vm, Modifier.padding(padding))
+            !state.loaded -> Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            state.editorOpen && state.draft != null -> EditorScreen(state.draft!!, vm, Modifier.padding(padding).consumeWindowInsets(padding)) { images.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
             !state.preferences.initialized -> WelcomeScreen(Modifier.padding(padding), vm::startDiary, { openZip.launch(arrayOf("*/*")) })
             settings -> SettingsScreen(state, vm, Modifier.padding(padding), { exportDialog = true }, { openZip.launch(arrayOf("*/*")) })
             else -> {
-                val display = state.entries.filter { (filterDay == null || it.day == filterDay) && (query.isBlank() || it.markdown.contains(query, true) || it.day.contains(query, true) || prettyDate(it.day).contains(query, true)) }.let { if (state.preferences.newestFirst) it.reversed() else it }
-                Feed(display, state, vm, filterDay, query, { filterDay = null; query = "" }, { detailId = it.id }, { exportDialog = true }, Modifier.padding(padding), now)
+                Feed(display, state, vm, filterDay, query, { filterDay = null; query = "" }, { detailId = it.id }, { exportDialog = true }, Modifier.padding(padding), now, feedScroll)
             }
         }
     }
@@ -130,8 +156,8 @@ fun HibiApp(vm: DiaryViewModel = viewModel()) {
     state.entries.firstOrNull { it.id == detailId }?.let { entry ->
         DetailDialog(entry, vm, { detailId = null }, { detailId = null; vm.openEditor(entry) })
     }
-    if (exportDialog) ExportPasswordDialog({ exportDialog = false }) { password -> exportDialog = false; vm.createExport(password) }
-    importUri?.let { value -> ImportPasswordDialog({ importUri = null }) { password -> importUri = null; vm.prepareImport(Uri.parse(value), password) } }
+    if (exportDialog) ExportPasswordDialog({ exportDialog = false }, create = { password -> exportDialog = false; vm.createExport(password) }, save = { password -> exportDialog = false; saveZip.launch(vm.requestSaveExport(password)) })
+    importUri?.let { value -> ImportPasswordDialog({ if (!state.busy) { importUri = null; vm.clearImportError() } }, state.busy, state.importError) { password -> vm.prepareImport(Uri.parse(value), password) } }
     state.export?.let { file ->
         ExportReadyDialog(file, vm::closeExport, share = {
             runCatching {
@@ -141,13 +167,32 @@ fun HibiApp(vm: DiaryViewModel = viewModel()) {
                     clipData = ClipData.newRawUri("Hibi-Backup", uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 context.startActivity(Intent.createChooser(intent, "Hibi-Backup teilen"))
+                vm.sharedExport(file)
             }.onFailure { vm.message("Keine passende App zum Teilen gefunden") }
-        }, save = { saveExportPath = file.absolutePath; saveZip.launch(file.name) })
+        })
     }
-    if (state.prepared != null && state.importPlan != null) ImportPreviewDialog(state.prepared!!, state.importPlan!!, vm::cancelImport, vm::applyImport)
-    if (state.busy) Dialog(onDismissRequest = {}, properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)) {
+    state.requestedEntry?.let { requested ->
+        val draft = state.draft
+        val editing = state.entries.any { it.id == draft?.id }
+        val targetEditing = state.entries.any { it.id == requested.id }
+        AlertDialog(onDismissRequest = vm::cancelEditorRequest, title = { Text("Ein Entwurf ist vorhanden") }, text = {
+            Text("${if (editing) "Bearbeitung" else "Entwurf"} vom ${draft?.day?.let(::prettyDate).orEmpty()}. Möchtest du ihn fortsetzen oder verwerfen?")
+        }, confirmButton = { TextButton(onClick = vm::resumeDraft) { Text("Entwurf fortsetzen") } }, dismissButton = {
+            TextButton(onClick = vm::replaceDraftAndOpen) { Text(if (targetEditing) "Verwerfen und bearbeiten" else "Verwerfen und neu") }
+        })
+    }
+    if (state.prepared != null && state.importPlan != null) ImportPreviewDialog(state.prepared!!, state.importPlan!!, state.importWarnings, vm::cancelImport, vm::applyImport)
+    if (showOperation && state.operation != null) Dialog(onDismissRequest = {}, properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)) {
         Surface(shape = RoundedCornerShape(24.dp)) {
-            Row(Modifier.padding(24.dp), horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(30.dp)); Text("Einen Moment …") }
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(state.operation!!, style = MaterialTheme.typography.titleMedium)
+                val progress = state.progress
+                if (progress != null && progress.totalFiles > 0) {
+                    LinearProgressIndicator(progress = { progress.completedFiles.toFloat() / progress.totalFiles }, modifier = Modifier.fillMaxWidth())
+                    Text("${progress.completedFiles} von ${progress.totalFiles} Dateien", style = MaterialTheme.typography.bodyMedium)
+                } else CircularProgressIndicator(Modifier.size(30.dp))
+                if (state.cancellable) TextButton(onClick = vm::cancelOperation) { Text("Abbrechen") }
+            }
         }
     }
 }
@@ -159,31 +204,33 @@ private fun WelcomeScreen(modifier: Modifier, start: () -> Unit, restore: () -> 
         Spacer(Modifier.height(24.dp))
         Text("Ein Ort für deine Tage", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(12.dp))
-        Text("Bilder, Worte und kleine Momente. Dein Tagebuch bleibt bei dir.")
+        Text("Bilder, Worte und kleine Momente. Dein Tagebuch bleibt bei dir.", textAlign = TextAlign.Center)
         Spacer(Modifier.height(28.dp))
         Button(onClick = start, modifier = Modifier.fillMaxWidth()) { Text("Neues Tagebuch anlegen") }
         OutlinedButton(onClick = restore, modifier = Modifier.fillMaxWidth()) { Text("ZIP-Backup importieren") }
         Spacer(Modifier.height(16.dp))
-        Text("Sichere später eine ZIP über deine bevorzugte App. Keine Anmeldung erforderlich.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Sichere später eine ZIP über deine bevorzugte App. Keine Anmeldung erforderlich.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
     }
 }
 
 @Composable
-private fun Feed(entries: List<Entry>, state: UiState, vm: DiaryViewModel, day: String?, query: String, clear: () -> Unit, open: (Entry) -> Unit, export: () -> Unit, modifier: Modifier, now: Long) {
-    val scroll = rememberLazyListState()
-    LaunchedEffect(entries.lastOrNull()?.id, entries.size, state.preferences.newestFirst, day, query) {
-        if (entries.isNotEmpty()) scroll.scrollToItem(if (state.preferences.newestFirst) 0 else entries.lastIndex)
-    }
+private fun Feed(entries: List<Entry>, state: UiState, vm: DiaryViewModel, day: String?, query: String, clear: () -> Unit, open: (Entry) -> Unit, export: () -> Unit, modifier: Modifier, now: Long, scroll: LazyListState) {
     Column(modifier.fillMaxSize()) {
         if (reminderDue(state.preferences, now) && state.entries.isNotEmpty()) {
             Card(Modifier.padding(horizontal = HibiDesign.pagePadding, vertical = 8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                 Row(Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Zeit für ein Backup", style = MaterialTheme.typography.titleMedium)
+                        Text("Letzter Export: ${exportDate(state.preferences.lastExportAt)}", style = MaterialTheme.typography.bodySmall)
                         TextButton(onClick = export, contentPadding = PaddingValues(0.dp)) { Text("ZIP erstellen und extern sichern") }
                     }
                     IconButton(onClick = vm::dismissReminder) { Icon(Icons.Outlined.Close, "Erinnerung bis zum nächsten Termin schließen") }
                 }
+            }
+        }
+        state.draft?.let { draft ->
+            TextButton(onClick = vm::resumeDraft, modifier = Modifier.padding(horizontal = HibiDesign.pagePadding)) {
+                Text("${if (state.entries.any { it.id == draft.id }) "Bearbeitung" else "Entwurf"} vom ${draft.day} fortsetzen")
             }
         }
         if (day != null || query.isNotEmpty()) {
@@ -198,13 +245,13 @@ private fun Feed(entries: List<Entry>, state: UiState, vm: DiaryViewModel, day: 
             Text(if (query.isNotEmpty()) "Keine passenden Einträge" else if (day != null) "Dieser Tag ist noch frei" else "Dein erster Moment", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(10.dp))
             Text(if (query.isNotEmpty()) "Versuche andere Worte oder ein Datum." else "Ein Bild, ein Gedanke – oder beides.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (query.isEmpty()) Button(onClick = { vm.openEditor(day?.let { Entry(day = it) }) }, modifier = Modifier.padding(top = 18.dp)) { Text(if (state.draft != null) "Entwurf fortsetzen" else "Eintrag erstellen") }
-        } else LazyColumn(state = scroll, contentPadding = PaddingValues(start = HibiDesign.pagePadding, end = HibiDesign.pagePadding, top = 10.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            if (query.isEmpty()) Button(onClick = { vm.newEntry(day) }, modifier = Modifier.padding(top = 18.dp)) { Text("Eintrag erstellen") }
+        } else LazyColumn(state = scroll, contentPadding = PaddingValues(top = 10.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             items(entries, key = { it.id }) { entry ->
-                Card(Modifier.fillMaxWidth().clickable { open(entry) }, shape = RoundedCornerShape(HibiDesign.cardRadius), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).clickable(role = Role.Button) { open(entry) }) {
                     PhotoCarousel(entry.photos, vm::mediaFile, state.preferences.pictureFormat) { open(entry) }
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                        Text(prettyDate(entry.day), style = MaterialTheme.typography.titleMedium)
+                    Column(Modifier.padding(horizontal = HibiDesign.pagePadding, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Text(feedDate(entry.day), style = MaterialTheme.typography.titleMedium)
                         if (entry.markdown.isNotBlank()) MarkdownText(entry.markdown, Modifier.fillMaxWidth(), preview = true)
                     }
                 }
@@ -240,11 +287,13 @@ private fun CalendarDialog(entries: List<Entry>, selected: String?, close: () ->
                             else {
                                 val date = month.atDay(day).toString()
                                 val current = date == selected || (selected == null && date == LocalDate.now().toString())
-                                Column(Modifier.weight(1f).height(48.dp).background(if (current) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface, CircleShape)
+                                Box(Modifier.weight(1f).height(48.dp)
                                     .semantics { contentDescription = "${prettyDate(date)}${if (date in marked) ", mit Eintrag" else ", ohne Eintrag"}" }
-                                    .clickable(role = Role.Button) { choose(date) }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                                    .clickable(role = Role.Button) { choose(date) }, contentAlignment = Alignment.Center) {
+                                    Column(Modifier.size(40.dp).background(if (current) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface, CircleShape), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                                     Text(day.toString(), style = MaterialTheme.typography.bodyMedium)
-                                    Box(Modifier.padding(top = 3.dp).size(4.dp).background(if (date in marked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface, CircleShape))
+                                     Box(Modifier.padding(top = 3.dp).size(6.dp).background(if (date in marked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface, CircleShape))
+                                    }
                                 }
                             }
                         }
@@ -260,7 +309,10 @@ private fun CalendarDialog(entries: List<Entry>, selected: String?, close: () ->
 @Composable
 private fun SearchDialog(initial: String, close: () -> Unit, apply: (String) -> Unit) {
     var value by rememberSaveable { mutableStateOf(initial) }
-    AlertDialog(onDismissRequest = close, title = { Text("Erinnerungen finden") }, text = {
-        OutlinedTextField(value, { value = it }, label = { Text("Text oder Datum") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    AlertDialog(onDismissRequest = close, title = { Text("Einträge finden") }, text = {
+        OutlinedTextField(value, { value = it }, label = { Text("Text oder Datum") }, singleLine = true, modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { apply(value.trim()) }))
     }, confirmButton = { TextButton(onClick = { apply(value.trim()) }) { Text("Suchen") } }, dismissButton = { TextButton(onClick = close) { Text("Abbrechen") } })
 }

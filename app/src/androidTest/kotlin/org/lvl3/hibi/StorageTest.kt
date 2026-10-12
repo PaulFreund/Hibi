@@ -81,7 +81,7 @@ class StorageTest {
         }
     }
 
-    @Test fun inconsistentImageMetadataRejectsEveryIncomingEntryBeforeAnyWrite() {
+    @Test fun platformMetadataDifferencesWarnAndRestoreExactOriginalBytes() {
         val context = context(); val diary = LocalDiary(context)
         val local = Entry(markdown = "Bestehender Eintrag"); diary.save(local)
         val original = picture(context)
@@ -91,7 +91,23 @@ class StorageTest {
         val a = Entry(markdown = "Neue Worte"); val b = Entry(photos = listOf(photo))
         val manifest = org.lvl3.hibi.backup.BackupManifest(exportedAt = 1, newestFirst = false, pictureFormat = PictureFormat.SQUARE, reminderPeriod = ReminderPeriod.WEEK, entries = emptyList())
         PreparedImport(folder, manifest, listOf(a, b), mapOf(photo.id to staged)).use { prepared ->
-            try { diary.import(prepared); fail("Invalid metadata accepted") } catch (_: IllegalArgumentException) { }
+            assertEquals(1, diary.validateImport(prepared).size)
+            assertEquals(2, diary.import(prepared).additions.size)
+            assertArrayEquals(original.readBytes(), diary.mediaFile(photo).readBytes())
+        }
+        assertEquals(3, diary.entries().size)
+        assertEquals(local, diary.entries().single { it.id == local.id })
+    }
+
+    @Test fun changedStagedOriginalRejectsAllEntriesEvenWithValidImageMetadata() {
+        val context = context(); val diary = LocalDiary(context)
+        val local = Entry(markdown = "Bleibt erhalten"); diary.save(local)
+        val original = picture(context); val photo = Photo(UUID.randomUUID().toString(), "jpg", "image/jpeg", 160, 90, sha256(original))
+        val folder = File(context.cacheDir, "prepared").apply { mkdirs() }
+        val staged = original.copyTo(File(folder, photo.filename)).apply { appendBytes(byteArrayOf(1)) }
+        val manifest = org.lvl3.hibi.backup.BackupManifest(exportedAt = 1, newestFirst = false, pictureFormat = PictureFormat.SQUARE, reminderPeriod = ReminderPeriod.WEEK, entries = emptyList())
+        PreparedImport(folder, manifest, listOf(Entry(markdown = "Neu"), Entry(photos = listOf(photo))), mapOf(photo.id to staged)).use {
+            try { diary.import(it); fail("Changed original accepted") } catch (_: IllegalArgumentException) { }
         }
         assertEquals(listOf(local), diary.entries())
     }

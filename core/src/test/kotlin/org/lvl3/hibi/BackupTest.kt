@@ -11,6 +11,7 @@ import org.junit.rules.TemporaryFolder
 import org.lvl3.hibi.backup.*
 import org.lvl3.hibi.model.*
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.time.Instant
 import java.time.ZoneId
@@ -141,5 +142,57 @@ class BackupTest {
         assertFalse(reminderDue(due.copy(nextReminderAt = nextReminder(january, ReminderPeriod.MONTH, utc)), january + 1))
         assertFalse(reminderDue(due.copy(reminderPeriod = ReminderPeriod.OFF), Long.MAX_VALUE))
         assertFalse(reminderDue(due.copy(initialized = false), january))
+    }
+
+    @Test fun directOutputStreamRoundTripsAesWithoutSeekingOrLocalArchiveStaging() {
+        val entry = Entry(markdown = "**Streamend gespeichert**", photos = listOf(photo(byteArrayOf(7, 8, 9))))
+        val stream = ByteArrayOutputStream()
+        backup.export(stream, listOf(entry), preferences, { file(it.filename) }, "direktes-ziel".toCharArray())
+        val zip = file().apply { writeBytes(stream.toByteArray()) }
+        backup.prepare(zip, file("stage"), "direktes-ziel".toCharArray()).use { assertEquals(entry, it.entries.single()) }
+        reject(zip, "falsch".toCharArray())
+    }
+
+    @Test fun callerOwnsFinalOutputCloseAndImagePayloadIsWrittenInBlocks() {
+        var closes = 0; var singleByteWrites = 0; var blockWrites = 0
+        val stream = object : ByteArrayOutputStream() {
+            override fun close() { closes++; super.close() }
+            override fun write(value: Int) { singleByteWrites++; super.write(value) }
+            override fun write(bytes: ByteArray, offset: Int, length: Int) { blockWrites++; super.write(bytes, offset, length) }
+        }
+        val entry = Entry(photos = listOf(photo(ByteArray(100000) { 7 })))
+        stream.use {
+            backup.export(it, listOf(entry), preferences, { image -> file(image.filename) })
+            assertEquals("Only the caller may close/commit the destination", 0, closes)
+            assertTrue("Image bytes should not become individual destination writes", singleByteWrites < 1000)
+            assertTrue(blockWrites > 0)
+        }
+        assertEquals(1, closes)
+        backup.prepare(file().apply { writeBytes(stream.toByteArray()) }, file("stage")).use { assertEquals(entry, it.entries.single()) }
+    }
+
+    @Test fun failedExportNamesEveryAffectedDayAndLeavesNoArchive() {
+        val first = photo(byteArrayOf(1)); val second = photo(byteArrayOf(2))
+        file(first.filename).delete(); file(second.filename).writeBytes(byteArrayOf(3))
+        val target = file()
+        try {
+            backup.export(target, listOf(Entry(day = "2026-10-10", photos = listOf(first)), Entry(day = "2026-10-11", photos = listOf(second))), preferences, { file(it.filename) })
+            fail("Bad originals accepted")
+        } catch (error: IllegalArgumentException) {
+            assertTrue(error.message!!.contains("2026-10-10")); assertTrue(error.message!!.contains("2026-10-11"))
+            assertFalse(target.exists())
+        }
+    }
+
+    @Test fun cancellationRemovesPartialArchiveAndRetainsOriginals() {
+        val original = photo(ByteArray(100000) { 42 }); val target = file()
+        try {
+            backup.export(target, listOf(Entry(photos = listOf(original))), preferences, { file(it.filename) }, progress = {
+                if (it.completedFiles == 1) throw java.util.concurrent.CancellationException("cancel")
+            })
+            fail("Cancelled export completed")
+        } catch (_: java.util.concurrent.CancellationException) {
+            assertFalse(target.exists()); assertEquals(original.sha256, sha256(file(original.filename)))
+        }
     }
 }

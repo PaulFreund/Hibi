@@ -100,14 +100,21 @@ class LocalDiary(private val context: Context) : DiaryRepository {
         } finally { temporary.delete() }
     }
 
-    /** Validate image metadata, stage files, then commit all new entries in ONE transaction. */
-    fun validateImport(prepared: PreparedImport) {
+    /** Hashes are mandatory; platform decoder differences must not prevent portable restore. */
+    fun validateImport(prepared: PreparedImport): List<String> {
+        val warnings = mutableListOf<String>()
         prepared.entries.forEach { entry ->
-            entry.photos.forEach { photo ->
-                val info = imageInfo(prepared.media.getValue(photo.id))
-                require(info.width == photo.width && info.height == photo.height && info.mime == photo.mimeType) { "Bildinformationen stimmen nicht mit dem Backup überein" }
+            validate(entry)
+            entry.photos.forEachIndexed { index, photo ->
+                val source = prepared.media.getValue(photo.id).takeIf { it.isFile } ?: mediaFile(photo)
+                require(source.isFile && sha256(source) == photo.sha256) { "Bilddatei ist beschädigt: ${entry.day}, Bild ${index + 1}" }
+                val info = runCatching { imageInfo(source) }.getOrNull()
+                if (info == null) warnings += "${entry.day}, Bild ${index + 1}: auf diesem Gerät nicht lesbar; Original wird erhalten."
+                else if (info.width != photo.width || info.height != photo.height || info.mime != photo.mimeType)
+                    warnings += "${entry.day}, Bild ${index + 1}: abweichende Bildinformationen; Original wird erhalten."
             }
         }
+        return warnings
     }
 
     fun import(prepared: PreparedImport): MergePlan {
@@ -120,12 +127,15 @@ class LocalDiary(private val context: Context) : DiaryRepository {
                 if (target.exists()) require(sha256(target) == photo.sha256) { "Lokale Bild-ID hat einen anderen Inhalt" }
                 else {
                     val source = prepared.media.getValue(photo.id)
-                    val temporary = File(media, "${photo.id}.part")
-                    try {
-                        FileOutputStream(temporary).use { output -> source.inputStream().use { it.copyTo(output) }; output.fd.sync() }
-                        require(temporary.renameTo(target)) { "Bild kann nicht übernommen werden" }
+                    // Staging and media normally share the app filesystem. Rename avoids another full copy.
+                    if (!source.renameTo(target)) {
+                        val temporary = File(media, "${photo.id}.part")
+                        try {
+                            FileOutputStream(temporary).use { output -> source.inputStream().use { it.copyTo(output) }; output.fd.sync() }
+                            require(temporary.renameTo(target)) { "Bild kann nicht übernommen werden" }
+                        } finally { temporary.delete() }
+                    }
                         created += target
-                    } finally { temporary.delete() }
                 }
             }
             transaction {
@@ -138,7 +148,19 @@ class LocalDiary(private val context: Context) : DiaryRepository {
                     nextReminderAt = nextReminder(System.currentTimeMillis(), prepared.manifest.reminderPeriod)))
             }
             return plan
-        } catch (error: Exception) { created.forEach { it.delete() }; throw error }
+        } catch (error: Exception) {
+            // Keep the verified preview usable after a failed DB transaction.
+            created.forEach { target ->
+                val staged = prepared.media.values.firstOrNull { it.name == target.name }
+                if (staged == null || staged.exists() || !target.renameTo(staged)) target.delete()
+            }
+            throw error
+        }
+    }
+
+    fun cleanTemporaryMedia() {
+        media.listFiles()?.filter { it.name.endsWith(".part") }?.forEach { it.delete() }
+        collectUnusedMedia()
     }
 
     private fun writeEntry(entry: Entry) {

@@ -22,7 +22,7 @@ Voraussetzungen: JDK 21, Android-SDK mit Plattform 36 und Build Tools 36, Intern
 adb install -r .\app\build\outputs\apk\release\app-release.apk
 ```
 
-Die erste APK ist mit dem **Entwicklungszertifikat dieses Hosts** signiert. Updates müssen mit demselben Schlüssel signiert werden, damit `adb install -r` die Daten erhält. Für einen eigenen Release-Schlüssel die Signing-Konfiguration anpassen; private Schlüssel niemals ins Repository aufnehmen. Debug-Builds verwenden `org.lvl3.hibi.debug`, Release-Builds `org.lvl3.hibi`.
+Release-Builds verwenden eine eigene PKCS12-Datei außerhalb von Git. Das Zertifikat der ersten APK wurde beibehalten: Updates mit `adb install -r` erhalten damit die Daten. Der Build liest `HIBI_SIGNING_PROPERTIES` oder standardmäßig `~/.ivy/secrets/Hibi/signing.properties`; diese Datei enthält `storeFile`, `storePassword`, `keyAlias` und `keyPassword`. Ein Release ohne konfigurierte Signierung schlägt fehl. Schlüsseldatei und Zugangsdaten unabhängig vom Build-Rechner sichern und vor jedem Rechnerwechsel prüfen. Private Schlüssel und Passwörter niemals ins Repository aufnehmen. **Vor einer Deinstallation oder Neuinstallation zuerst eine ZIP extern sichern.** Debug-Builds verwenden `org.lvl3.hibi.debug`, Release-Builds `org.lvl3.hibi`.
 
 ```powershell
 .\gradlew.bat :app:assembleDebugAndroidTest
@@ -46,15 +46,15 @@ Gestaltungsänderungen benötigen keine Datenmigration. Änderungen am SQLite-Sc
 
 ## Backup-Verhalten
 
-In den Einstellungen eine ZIP erstellen, optional ein Passwort vergeben und anschließend **Mit … teilen** oder **ZIP-Datei speichern** wählen. OneDrive, Google Drive oder eine andere Ziel-App übernimmt den Upload und ihre WLAN-/Mobilfunkeinstellungen. Hibi zeigt **Letzter Export** und bestätigt keinen Cloud-Upload. Nach einer Neuinstallation **ZIP-Backup importieren** wählen.
+In den Einstellungen den ZIP-Export öffnen und optional ein Passwort vergeben. **ZIP-Datei direkt speichern** schreibt ohne lokale ZIP-Kopie in das gewählte Dateiziel. **ZIP erstellen** erzeugt eine einzelne temporäre ZIP zum anschließenden Teilen. OneDrive, Google Drive oder eine andere Ziel-App übernimmt den Upload und ihre WLAN-/Mobilfunkeinstellungen. Hibi zeigt **Letzter Export** und bestätigt keinen Cloud-Upload. Nach einer Neuinstallation **ZIP-Backup importieren** wählen.
 
 Ein Backup enthält veröffentlichte Einträge, Originalbilder und die Anzeige-/Erinnerungseinstellungen. Entwürfe sind nicht enthalten. Dateinamen und Ordnernamen bleiben auch bei AES-ZIPs lesbar; alle Dateiinhalte einschließlich Manifest werden verschlüsselt. Das Passwort wird nicht gespeichert und lässt sich nicht zurücksetzen. Desktop-Tools müssen AES-ZIPs unterstützen.
 
-Beim Import werden alle Inhalte geprüft und erst nach der Vorschau neue Einträge in einer Datenbanktransaktion übernommen. Bereits vorhandene IDs mit anderem Inhalt bleiben lokal erhalten; eine automatische Zusammenführung von Textfassungen gibt es nicht. Der ausführliche Dateivertrag steht in [docs/backup-format.md](docs/backup-format.md).
+Beim Import werden alle Inhalte und SHA-256-Prüfsummen geprüft und erst nach der Vorschau neue Einträge in einer Datenbanktransaktion übernommen. Unterschiede zwischen Bilddecodern bzw. EXIF-Informationen werden als Hinweise angezeigt; auch auf diesem Gerät nicht lesbare Originale bleiben erhalten und können wieder exportiert werden. Die Bildanzeige verwendet dann einen Platzhalter. Bereits vorhandene IDs mit anderem Inhalt bleiben lokal erhalten; eine automatische Zusammenführung von Textfassungen gibt es nicht. Der ausführliche Dateivertrag steht in [docs/backup-format.md](docs/backup-format.md).
 
-Erinnerungen werden nach Export, × oder einer geänderten Häufigkeit auf den nächsten Zeitraum gesetzt. Ein Monat bedeutet einen Kalendermonat. Es gibt keine Hintergrund-Uploads oder Push-Erinnerungen. Änderungen seit der letzten extern gespeicherten ZIP sind bei Geräteverlust nicht wiederherstellbar.
+Erinnerungen werden nach erfolgreichem Dateispeichern, Öffnen des Teilen-Dialogs, × oder einer geänderten Häufigkeit auf den nächsten Zeitraum gesetzt. Eine nur erzeugte und anschließend geschlossene ZIP verschiebt die Erinnerung nicht. Der Teilen-Dialog kann abgebrochen werden; **Letzter Export** belegt dabei nur die Übergabe, keinen abgeschlossenen Upload. Ein Monat bedeutet einen Kalendermonat. Es gibt keine Hintergrund-Uploads oder Push-Erinnerungen. Änderungen seit der letzten extern gespeicherten ZIP sind bei Geräteverlust nicht wiederherstellbar.
 
-Lokal erzeugte ZIPs bleiben zum Teilen verfügbar. Hibi behält mindestens die drei neuesten und entfernt weitere lokale Kopien erst nach sieben Tagen. Extern gespeicherte Kopien verwaltet die Ziel-App.
+Hibi hält höchstens eine temporäre ZIP zum Teilen im Cache. Sie wird beim nächsten Teilen-Export oder Kaltstart entfernt und kann auch vom System bereinigt werden. Den Upload in der Ziel-App abschließen, bevor ein weiteres Teilen-Backup erzeugt wird. Extern gespeicherte Kopien verwaltet die Ziel-App. Verwaiste Importdateien und unvollständige Fotokopien werden beim Kaltstart aufgeräumt. Androids automatisches Cloud-Backup und Geräteübertragung sind ausdrücklich deaktiviert; Wiederherstellung erfolgt über die portable ZIP.
 
 ## Bibliotheken
 

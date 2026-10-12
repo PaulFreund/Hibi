@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import net.lingala.zip4j.ZipFile
+import net.lingala.zip4j.io.outputstream.ZipOutputStream
 import net.lingala.zip4j.exception.ZipException
 import net.lingala.zip4j.model.ZipParameters
 import net.lingala.zip4j.model.enums.AesKeyStrength
@@ -14,6 +15,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
+import java.io.OutputStream
 import java.nio.file.Files
 
 @Serializable
@@ -41,16 +43,61 @@ class PreparedImport(
     override fun close() { directory.deleteRecursively() }
 }
 
+data class ArchiveProgress(val completedFiles: Int, val totalFiles: Int)
+
 /** Portable, versioned ZIP format. No Android or UI dependencies. */
 class ZipBackup {
     fun export(
         output: File, entries: List<Entry>, preferences: Preferences,
         mediaFile: (Photo) -> File, password: CharArray? = null,
         now: Long = System.currentTimeMillis(),
+        progress: (ArchiveProgress) -> Unit = {},
     ) {
         require(!output.exists()) { "Zieldatei existiert bereits" }
+        try {
+            output.outputStream().use { export(it, entries, preferences, mediaFile, password, now, progress) }
+        } catch (error: Exception) { output.delete(); throw error }
+    }
+
+    /** One central directory, including AES; suitable for a SAF stream without a local ZIP copy. */
+    fun export(
+        output: OutputStream, entries: List<Entry>, preferences: Preferences,
+        mediaFile: (Photo) -> File, password: CharArray? = null,
+        now: Long = System.currentTimeMillis(),
+        progress: (ArchiveProgress) -> Unit = {},
+    ) {
         entries.forEach(::validate)
+        require(entries.size <= 20000) { "Zu viele Einträge für ein Backup" }
         require(entries.map { it.id }.distinct().size == entries.size) { "Doppelte Einträge" }
+        val totalFiles = 1 + entries.sumOf { 1 + it.photos.size }
+        val photoIds = entries.flatMap { it.photos }.map { it.id }
+        require(photoIds.distinct().size == photoIds.size && totalFiles <= 100000) { "Zu viele oder doppelte Bilddateien" }
+        progress(ArchiveProgress(0, totalFiles))
+        val problems = mutableListOf<String>()
+        val buffer = ByteArray(64 * 1024)
+        // Fail before creating archive entries; never silently omit diary originals.
+        entries.forEach { entry -> entry.photos.forEachIndexed { index, photo ->
+            val source = mediaFile(photo)
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val readable = runCatching {
+                require(source.isFile && source.length() <= MAX_FILE_BYTES)
+                source.inputStream().use { input ->
+                    while (true) {
+                        val size = input.read(buffer); if (size < 0) break
+                        digest.update(buffer, 0, size); progress(ArchiveProgress(0, totalFiles))
+                    }
+                }
+                digest.digest().joinToString("") { "%02x".format(it) } == photo.sha256
+            }.getOrElse { error ->
+                if (error is java.util.concurrent.CancellationException) throw error
+                false
+            }
+            if (!readable) problems += "${entry.day}, Bild ${index + 1} (${photo.id.take(8)})"
+        } }
+        require(problems.isEmpty()) {
+            "Originalbilder fehlen oder sind beschädigt: ${problems.take(8).joinToString("; ")}" +
+                if (problems.size > 8) " · und ${problems.size - 8} weitere" else ""
+        }
         val records = entries.map { entry ->
             val base = "days/${entry.day}/${entry.id}"
             BackupEntry(entry.id, entry.day, entry.createdAt, entry.updatedAt,
@@ -59,33 +106,53 @@ class ZipBackup {
         }
         val manifest = BackupManifest(exportedAt = now, newestFirst = preferences.newestFirst,
             pictureFormat = preferences.pictureFormat, reminderPeriod = preferences.reminderPeriod, entries = records)
+        val manifestBytes = diaryJson.encodeToString(manifest).toByteArray()
+        require(manifestBytes.size <= 8 * 1024 * 1024) { "Backup-Verzeichnis ist zu groß" }
+        require(manifestBytes.size.toLong() + entries.sumOf { it.markdown.toByteArray().size.toLong() + it.photos.sumOf { photo -> mediaFile(photo).length() } } <= MAX_TOTAL_BYTES) { "Backup ist zu groß" }
         val encrypted = password != null && password.isNotEmpty()
-        try {
-            ZipFile(output, password ?: charArrayOf()).use { zip ->
-                fun add(name: String, stream: InputStream, image: Boolean = false) {
+        var completed = 0
+        // The caller owns the SAF/file stream and observes its final close exactly once.
+        val nonClosing = object : OutputStream() {
+            override fun write(value: Int) { output.write(value) }
+            override fun write(bytes: ByteArray, offset: Int, length: Int) { output.write(bytes, offset, length) }
+            override fun flush() { output.flush() }
+            override fun close() { flush() }
+        }
+        ZipOutputStream(nonClosing, password ?: charArrayOf()).use { zip ->
+                fun add(name: String, stream: InputStream, image: Boolean = false, size: Long = 0, expectedHash: String? = null) {
                     val parameters = ZipParameters().apply {
                         fileNameInZip = name
                         compressionMethod = if (image) CompressionMethod.STORE else CompressionMethod.DEFLATE
+                        if (image) entrySize = size
                         isEncryptFiles = encrypted
                         if (encrypted) { encryptionMethod = EncryptionMethod.AES; aesKeyStrength = AesKeyStrength.KEY_STRENGTH_256 }
                     }
-                    stream.use { zip.addStream(it, parameters) }
+                    zip.putNextEntry(parameters)
+                    val digest = expectedHash?.let { java.security.MessageDigest.getInstance("SHA-256") }
+                    stream.use { input ->
+                        while (true) {
+                            val size = input.read(buffer); if (size < 0) break
+                            zip.write(buffer, 0, size); digest?.update(buffer, 0, size)
+                            progress(ArchiveProgress(completed, totalFiles))
+                        }
+                    }
+                    zip.closeEntry()
+                    require(digest == null || digest.digest().joinToString("") { "%02x".format(it) } == expectedHash) { "Ein Originalbild hat sich während des Exports geändert: $name" }
+                    progress(ArchiveProgress(++completed, totalFiles))
                 }
-                add("manifest.json", ByteArrayInputStream(diaryJson.encodeToString(manifest).toByteArray()))
+                add("manifest.json", ByteArrayInputStream(manifestBytes))
                 entries.zip(records).forEach { (entry, record) ->
                     add(record.markdownFile, ByteArrayInputStream(entry.markdown.toByteArray()))
                     record.photos.forEach { item ->
                         val source = mediaFile(item.photo)
-                        require(source.isFile && sha256(source) == item.photo.sha256) { "Ein Originalbild fehlt oder ist beschädigt" }
-                        add(item.file, source.inputStream(), true)
+                        add(item.file, source.inputStream(), true, source.length(), item.photo.sha256)
                     }
                 }
-            }
-        } catch (error: Exception) { output.delete(); throw error }
+        }
     }
 
     /** Read every byte and verify every digest BEFORE the repository may apply anything. */
-    fun prepare(archive: File, stagingParent: File, password: CharArray? = null): PreparedImport {
+    fun prepare(archive: File, stagingParent: File, password: CharArray? = null, progress: (ArchiveProgress) -> Unit = {}): PreparedImport {
         stagingParent.mkdirs()
         val stage = Files.createTempDirectory(stagingParent.toPath(), "hibi-import-").toFile()
         try {
@@ -103,10 +170,13 @@ class ZipBackup {
                     require(header.uncompressedSize in 0..MAX_FILE_BYTES) { "Eine Datei ist zu groß" }
                 }
                 val files = headers.filterNot { it.isDirectory }.associateBy { it.fileName }
+                var completed = 0
+                progress(ArchiveProgress(completed, files.size))
                 require(files.size == headers.count { !it.isDirectory }) { "Doppelte Dateinamen im ZIP" }
                 require(headers.sumOf { it.uncompressedSize } <= MAX_TOTAL_BYTES) { "Backup ist zu groß" }
                 val manifestHeader = files["manifest.json"] ?: error("Hibi-Manifest fehlt")
                 val manifestBytes = zip.getInputStream(manifestHeader).use { readLimited(it, 8 * 1024 * 1024) }
+                progress(ArchiveProgress(++completed, files.size))
                 val manifest = diaryJson.decodeFromString<BackupManifest>(manifestBytes.toString(Charsets.UTF_8))
                 require(manifest.format == "hibi" && manifest.version == 1) { "Nicht unterstütztes Backup-Format" }
                 require(manifest.entries.size <= 20000 && manifest.exportedAt >= 0) { "Ungültiges Backup" }
@@ -122,6 +192,7 @@ class ZipBackup {
                     expected += record.markdownFile
                     val textHeader = files[record.markdownFile] ?: error("Textdatei fehlt")
                     val text = zip.getInputStream(textHeader).use { readLimited(it, 2 * 1024 * 1024) }
+                    progress(ArchiveProgress(++completed, files.size))
                     actualTotal += text.size
                     require(sha256(text) == record.markdownSha256) { "Textdatei ist beschädigt" }
                     val entry = Entry(record.id, record.day, record.createdAt, record.updatedAt,
@@ -141,12 +212,14 @@ class ZipBackup {
                                     val size = input.read(buffer); if (size < 0) break
                                     count += size; actualTotal += size
                                     require(count <= MAX_FILE_BYTES && actualTotal <= MAX_TOTAL_BYTES) { "Backup ist zu groß" }
-                                    output.write(buffer, 0, size)
+                                     output.write(buffer, 0, size)
+                                     progress(ArchiveProgress(completed, files.size))
                                 }
                             }
                         }
                         require(sha256(destination) == item.photo.sha256) { "Bilddatei ist beschädigt" }
                         media[item.photo.id] = destination
+                        progress(ArchiveProgress(++completed, files.size))
                     }
                     entry
                 }

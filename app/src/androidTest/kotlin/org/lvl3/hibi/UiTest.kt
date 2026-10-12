@@ -14,6 +14,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import org.lvl3.hibi.ui.DiaryViewModel
+import org.lvl3.hibi.ui.EditorController
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Before
@@ -39,8 +40,10 @@ class UiTest {
     }
 
     private fun reload() {
-        rule.activityRule.scenario.onActivity { ViewModelProvider(it)[DiaryViewModel::class.java].load() }
-        rule.waitUntil(20000) { rule.onAllNodesWithText("Einen Moment …").fetchSemanticsNodes().isEmpty() }
+        val expectedEntries = diary.entries(); val expectedPreferences = diary.preferences()
+        lateinit var viewModel: DiaryViewModel
+        rule.activityRule.scenario.onActivity { viewModel = ViewModelProvider(it)[DiaryViewModel::class.java]; viewModel.load() }
+        rule.waitUntil(20000) { val state = viewModel.state.value; state.loaded && !state.busy && state.entries == expectedEntries && state.preferences == expectedPreferences }
         rule.waitForIdle()
     }
 
@@ -114,6 +117,7 @@ class UiTest {
         rule.waitForIdle()
         assertEquals("true", javascript("!!document.querySelector('.toastui-editor-ww-container h2')"))
         assertEquals("true", javascript("!!document.querySelector('.toastui-editor-ww-container strong')"))
+        rule.waitUntil(15000) { diary.draft()?.markdown?.contains("**Gute Gedanken**") == true }
         screenshot("04-editor-wysiwyg")
         rule.onNodeWithText("Speichern").assertIsEnabled().performClick()
         rule.waitUntil(15000) { diary.entries().any { it.markdown.contains("**Gute Gedanken**") } }
@@ -140,10 +144,11 @@ class UiTest {
         rule.onAllNodes(hasSetTextAction())[1].performTextInput("Hibi-Testpasswort")
         screenshot("06-zip-passwort")
         rule.onNodeWithText("ZIP erstellen").performClick()
-        rule.waitUntil(20000) { diary.preferences().lastExportAt != null }
+        rule.waitUntil(20000) { rule.onAllNodesWithText("Deine ZIP ist bereit").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("Deine ZIP ist bereit").assertExists()
         screenshot("07-zip-bereit")
-        val zip = File(app.filesDir, "exports").listFiles()!!.filter { it.extension == "zip" }.maxBy { it.lastModified() }
+        assertNull("Creating an unshared ZIP must not count as external export", diary.preferences().lastExportAt)
+        val zip = File(app.cacheDir, "exports").listFiles()!!.filter { it.extension == "zip" }.maxBy { it.lastModified() }
         org.lvl3.hibi.backup.ZipBackup().prepare(zip, File(app.cacheDir, "ui-restore"), "Hibi-Testpasswort".toCharArray()).use { assertEquals(2, it.entries.size) }
         rule.onNodeWithText("Fertig").performClick()
     }
@@ -163,5 +168,59 @@ class UiTest {
         assertEquals(draft.markdown, diary.draft()!!.markdown)
         assertTrue(diary.mediaFile(diary.draft()!!.photos.single()).isFile)
         store.clear()
+    }
+
+    @Test fun unreadyEditorReadRetainsRestoredTextInsteadOfReturningEmptyMarkdown() {
+        var result = ""
+        rule.activityRule.scenario.onActivity {
+            EditorController().apply { latest = "**Wiederhergestellte Worte**" }.read { value -> result = value }
+        }
+        assertEquals("**Wiederhergestellte Worte**", result)
+    }
+
+    @Test fun unchangedEditingIsDiscardedAndNewEntryNeverSilentlyOverwritesEditingDraft() {
+        fixture()
+        val original = diary.entries().first()
+        val store = ViewModelStore(); lateinit var fresh: DiaryViewModel
+        rule.activityRule.scenario.onActivity { fresh = DiaryViewModel(app); store.put("draft-review", fresh) }
+        rule.waitUntil(20000) { fresh.state.value.loaded && !fresh.state.value.busy }
+        rule.activityRule.scenario.onActivity { fresh.openEditor(original); fresh.closeEditor() }
+        rule.waitUntil(20000) { !fresh.state.value.editorOpen && !fresh.state.value.busy }
+        assertNull(diary.draft()); assertEquals(original, diary.entries().single { it.id == original.id })
+        rule.activityRule.scenario.onActivity {
+            fresh.openEditor(original); fresh.updateDraft { it.copy(markdown = "Bearbeitung behalten") }; fresh.closeEditor()
+        }
+        rule.waitUntil(20000) { diary.draft()?.markdown == "Bearbeitung behalten" && !fresh.state.value.editorOpen }
+        rule.activityRule.scenario.onActivity { fresh.newEntry("2026-10-15") }
+        assertEquals(original.id, fresh.state.value.draft!!.id)
+        assertEquals("2026-10-15", fresh.state.value.requestedEntry!!.day)
+        assertFalse(fresh.state.value.editorOpen)
+        rule.activityRule.scenario.onActivity { fresh.replaceDraftAndOpen() }
+        rule.waitUntil(20000) { fresh.state.value.editorOpen && fresh.state.value.draft?.id != original.id }
+        assertEquals("2026-10-15", fresh.state.value.draft!!.day)
+        assertEquals(original, diary.entries().single { it.id == original.id })
+        rule.activityRule.scenario.onActivity { fresh.discardDraft() }
+        rule.waitUntil(20000) { diary.draft() == null && !fresh.state.value.editorOpen }
+        store.clear()
+    }
+
+    @Test fun failedPublishRetainsLatestDraftWordsAndExistingEntries() {
+        fixture()
+        val before = diary.entries(); val draft = Entry()
+        val database = app.openOrCreateDatabase("hibi.db", 0, null)
+        database.execSQL("CREATE TRIGGER review_save_failure BEFORE INSERT ON entries WHEN NEW.id='${draft.id}' BEGIN SELECT RAISE(ABORT, 'review save failure'); END")
+        val store = ViewModelStore(); lateinit var fresh: DiaryViewModel
+        try {
+            rule.activityRule.scenario.onActivity { fresh = DiaryViewModel(app); store.put("failed-save", fresh) }
+            rule.waitUntil(20000) { fresh.state.value.loaded && !fresh.state.value.busy }
+            rule.activityRule.scenario.onActivity { fresh.openEditor(draft); fresh.saveDraft("Diese Worte müssen auch nach einem Speicherfehler bleiben") }
+            rule.waitUntil(20000) { fresh.state.value.message?.contains("review save failure") == true }
+            assertEquals(draft.id, diary.draft()!!.id)
+            assertEquals("Diese Worte müssen auch nach einem Speicherfehler bleiben", diary.draft()!!.markdown)
+            assertEquals(before, diary.entries())
+        } finally {
+            database.execSQL("DROP TRIGGER IF EXISTS review_save_failure"); database.close()
+            store.clear(); diary.discardDraft()
+        }
     }
 }
