@@ -107,7 +107,8 @@ class UiTest {
     @Test fun wysiwygEditsSaveMarkdownAndCanBeOpenedAgain() {
         fixture()
         rule.onNodeWithText("Eintrag").performClick()
-        rule.waitUntil(25000) { javascript("typeof editor !== 'undefined' && !!editor") == "true" }
+        // The first WebView renderer startup can exceed a minute on a constrained emulator host.
+        rule.waitUntil(180000) { javascript("typeof editor !== 'undefined' && !!editor") == "true" }
         val markdown = "## Ein kleiner Moment\n\n**Gute Gedanken** bleiben.\n\n- Kaffee\n- frische Luft"
         javascript("editor.setMarkdown(${JSONObject.quote(markdown)})")
         rule.waitForIdle()
