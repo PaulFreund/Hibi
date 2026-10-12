@@ -1,0 +1,10 @@
+<resources>
+    <!-- The palette lives here; Compose, platform chrome and the offline editor share it. -->
+    <color name="hibi_background">#F8F4EE</color>
+    <color name="hibi_surface">#FFFDF9</color>
+    <color name="hibi_accent">#B7664D</color>
+    <color name="hibi_accent_soft">#F1E0D6</color>
+    <color name="hibi_ink">#35463E</color>
+    <color name="hibi_muted">#69776E</color>
+    <color name="hibi_outline">#DDDCD3</color>
+</resources>

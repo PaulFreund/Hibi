@@ -1,0 +1,8 @@
+* text=auto eol=lf
+gradlew.bat text eol=crlf
+*.png binary
+*.jar binary
+# Preserve pinned upstream assets byte-for-byte, including upstream whitespace.
+app/src/main/assets/editor/de-de.js -text -whitespace
+app/src/main/assets/editor/toastui-editor-all.min.js -text -whitespace
+app/src/main/assets/editor/toastui-editor.min.css -text -whitespace
