@@ -59,9 +59,11 @@ class UiTest {
     }
 
     private fun screenshot(name: String) {
+        // Rendering diagnostics are optional; screenshot service failures must not abort feature assertions.
+        if (InstrumentationRegistry.getArguments().getString("hibi.screenshots") != "true") return
         rule.waitForIdle(); Thread.sleep(350)
         val file = File(app.getExternalFilesDir(null), "verification/$name.png").apply { parentFile!!.mkdirs() }
-        instrumentation.uiAutomation.takeScreenshot().useBitmap { bitmap -> file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) } }
+        instrumentation.uiAutomation.takeScreenshot()?.useBitmap { bitmap -> file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) } }
     }
     private fun Bitmap.useBitmap(block: (Bitmap) -> Unit) { try { block(this) } finally { recycle() } }
     private fun web(view: View): WebView? {

@@ -29,7 +29,7 @@ Die erste APK ist mit dem **Entwicklungszertifikat dieses Hosts** signiert. Upda
 .\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
-Speichertests verwenden eigene Datenbanken. Die UI-Tests verlangen einen Emulator und verwenden Testdaten im Debug-Paket. Sie prüfen Editor/Speichern, Feed, Kalender, Suche, Bildformat, Erinnerung und Export. Screenshots landen im externen App-Verzeichnis unter `verification/`. Das Foto in den Testassets stammt aus dem freigegebenen TASK-0030-Mockup; es wird nicht in der Release-App mitgeliefert.
+Speichertests verwenden eigene Datenbanken. Die UI-Tests verlangen einen Emulator und verwenden Testdaten im Debug-Paket. Sie prüfen Editor/Speichern, Feed, Kalender, Suche, Bildformat, Erinnerung und Export. Mit dem Instrumentierungsargument `hibi.screenshots=true` werden zusätzlich Screenshots im externen App-Verzeichnis unter `verification/` abgelegt, sofern Android die Bildaufnahme unterstützt. Das Foto in den Testassets stammt aus dem freigegebenen TASK-0030-Mockup; es wird nicht in der Release-App mitgeliefert.
 
 ## Code und Gestaltung
 
