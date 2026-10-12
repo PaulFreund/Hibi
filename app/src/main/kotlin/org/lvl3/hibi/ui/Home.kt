@@ -12,6 +12,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import kotlinx.coroutines.delay
@@ -310,9 +311,11 @@ private fun CalendarDialog(entries: List<Entry>, selected: String?, close: () ->
 private fun SearchDialog(initial: String, close: () -> Unit, apply: (String) -> Unit) {
     var value by rememberSaveable { mutableStateOf(initial) }
     val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    var focused by remember { mutableStateOf(false) }
     AlertDialog(onDismissRequest = close, title = { Text("Einträge finden") }, text = {
-        OutlinedTextField(value, { value = it }, label = { Text("Text oder Datum") }, singleLine = true, modifier = Modifier.fillMaxWidth().focusRequester(focus),
+        OutlinedTextField(value, { value = it }, label = { Text("Text oder Datum") }, singleLine = true, modifier = Modifier.fillMaxWidth().focusRequester(focus).onGloballyPositioned {
+            if (!focused) { focused = true; focus.requestFocus() }
+        },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { apply(value.trim()) }))
     }, confirmButton = { TextButton(onClick = { apply(value.trim()) }) { Text("Suchen") } }, dismissButton = { TextButton(onClick = close) { Text("Abbrechen") } })
 }

@@ -145,7 +145,8 @@ class BackupTest {
     }
 
     @Test fun directOutputStreamRoundTripsAesWithoutSeekingOrLocalArchiveStaging() {
-        val entry = Entry(markdown = "**Streamend gespeichert**", photos = listOf(photo(byteArrayOf(7, 8, 9))))
+        // Multiple AES blocks expose in-place encryption of the supplied write buffer.
+        val entry = Entry(markdown = "**Streamend gespeichert**", photos = listOf(photo(ByteArray(100000) { it.toByte() })))
         val stream = ByteArrayOutputStream()
         backup.export(stream, listOf(entry), preferences, { file(it.filename) }, "direktes-ziel".toCharArray())
         val zip = file().apply { writeBytes(stream.toByteArray()) }

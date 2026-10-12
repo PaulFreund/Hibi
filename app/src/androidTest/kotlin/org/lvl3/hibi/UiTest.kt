@@ -74,13 +74,15 @@ class UiTest {
         if (view is ViewGroup) for (i in 0 until view.childCount) web(view.getChildAt(i))?.let { return it }
         return null
     }
-    private fun javascript(expression: String): String {
+    private fun javascript(expression: String, required: Boolean = true): String {
         var result = "null"; val completed = CountDownLatch(1)
         rule.activityRule.scenario.onActivity { activity ->
             val view = web(activity.window.decorView)
             if (view == null) completed.countDown() else view.evaluateJavascript(expression) { value -> result = value; completed.countDown() }
         }
-        assertTrue("JavaScript callback timed out", completed.await(8, TimeUnit.SECONDS))
+        val answered = completed.await(8, TimeUnit.SECONDS)
+        if (required) assertTrue("JavaScript callback timed out", answered)
+        if (!answered) return "null" // Readiness polling tolerates a cold renderer; feature reads remain required.
         return result
     }
 
@@ -111,7 +113,7 @@ class UiTest {
         fixture()
         rule.onNodeWithText("Eintrag").performClick()
         // The first WebView renderer startup can exceed a minute on a constrained emulator host.
-        rule.waitUntil(180000) { javascript("typeof editor !== 'undefined' && !!editor") == "true" }
+        rule.waitUntil(180000) { javascript("typeof editor !== 'undefined' && !!editor", required = false) == "true" }
         val markdown = "## Ein kleiner Moment\n\n**Gute Gedanken** bleiben.\n\n- Kaffee\n- frische Luft"
         javascript("editor.setMarkdown(${JSONObject.quote(markdown)})")
         rule.waitForIdle()

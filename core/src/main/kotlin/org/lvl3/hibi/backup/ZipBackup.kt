@@ -132,7 +132,8 @@ class ZipBackup {
                     stream.use { input ->
                         while (true) {
                             val size = input.read(buffer); if (size < 0) break
-                            zip.write(buffer, 0, size); digest?.update(buffer, 0, size)
+                            // Zip4j AES may encrypt the caller's buffer in place.
+                            digest?.update(buffer, 0, size); zip.write(buffer, 0, size)
                             progress(ArchiveProgress(completed, totalFiles))
                         }
                     }
