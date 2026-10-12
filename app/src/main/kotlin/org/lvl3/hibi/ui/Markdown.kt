@@ -10,6 +10,7 @@ import android.widget.TextView
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import io.noties.markwon.Markwon
@@ -42,6 +43,7 @@ class EditorBridge(private val changed: (String) -> Unit) {
 @Composable
 fun MarkdownEditor(id: String, initial: String, controller: EditorController, modifier: Modifier, changed: (String) -> Unit) {
     val context = LocalContext.current
+    val fontScale = LocalConfiguration.current.fontScale
     val callback by rememberUpdatedState(changed)
     key(id) {
         AndroidView(modifier = modifier, factory = {
@@ -52,7 +54,7 @@ fun MarkdownEditor(id: String, initial: String, controller: EditorController, mo
                 settings.allowFileAccess = false
                 settings.allowContentAccess = false
                 settings.domStorageEnabled = false
-                settings.textZoom = (context.resources.configuration.fontScale * 100).toInt()
+                settings.textZoom = (fontScale * 100).toInt()
                 settings.blockNetworkLoads = true
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 addJavascriptInterface(EditorBridge { value -> controller.latest = value; callback(value) }, "Hibi")
@@ -78,7 +80,8 @@ fun MarkdownEditor(id: String, initial: String, controller: EditorController, mo
                 }
                 loadUrl("https://appassets.androidplatform.net/assets/editor/editor.html")
             }
-        }, onReset = null, onRelease = { view -> controller.webView = null; view.removeJavascriptInterface("Hibi"); view.destroy() })
+        }, onReset = null, onRelease = { view -> controller.webView = null; view.removeJavascriptInterface("Hibi"); view.destroy() },
+            update = { view -> view.settings.textZoom = (fontScale * 100).toInt() })
     }
 }
 

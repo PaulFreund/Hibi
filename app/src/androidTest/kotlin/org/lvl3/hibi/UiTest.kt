@@ -54,7 +54,7 @@ class UiTest {
         val a = diary.copyPhoto(Uri.fromFile(source)); val b = diary.copyPhoto(Uri.fromFile(source))
         diary.save(Entry(day = LocalDate.now().toString(), markdown = "Am See\n\nFrische Luft, warmes Licht und ein Moment nur für uns.", photos = listOf(a, b)))
         reload()
-        rule.waitUntil(20000) { rule.onAllNodesWithContentDescription("Kalender öffnen").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(20000) { rule.onAllNodesWithText("Kalender").fetchSemanticsNodes().isNotEmpty() }
         rule.waitUntil(20000) { rule.onAllNodesWithText("Bild wird geladen").fetchSemanticsNodes().isEmpty() }
     }
 
@@ -82,19 +82,19 @@ class UiTest {
     @Test fun feedCalendarSearchAndImageSettingWorkWithOriginalPhotos() {
         fixture()
         screenshot("01-feed-quadratisch")
-        rule.onNodeWithContentDescription("Kalender öffnen").performClick()
+        rule.onNodeWithText("Kalender").performClick()
         val day = LocalDate.now().toString()
         val label = LocalDate.parse(day).format(java.time.format.DateTimeFormatter.ofPattern("EEEE, d. MMMM yyyy", Locale.GERMAN)) + ", mit Eintrag"
         rule.onNodeWithContentDescription(label).assertExists()
         screenshot("02-kalender")
         rule.onNodeWithContentDescription(label).performClick()
         rule.onNodeWithContentDescription("Filter aufheben").performClick()
-        rule.onNodeWithContentDescription("Suche öffnen").performClick()
+        rule.onNodeWithText("Suche").performClick()
         rule.onNode(hasSetTextAction()).performTextInput("nicht-vorhanden")
         rule.onNodeWithText("Suchen").performClick()
         rule.onNodeWithText("Keine passenden Einträge").assertExists()
         rule.onNodeWithContentDescription("Filter aufheben").performClick()
-        rule.onNodeWithContentDescription("Einstellungen öffnen").performClick()
+        rule.onNodeWithText("Optionen").performClick()
         rule.onNodeWithText("Quellformat").performClick()
         rule.waitUntil(10000) { diary.preferences().pictureFormat == PictureFormat.ORIGINAL }
         rule.waitUntil(10000) { rule.onAllNodesWithText("Einen Moment …").fetchSemanticsNodes().isEmpty() }
@@ -104,7 +104,7 @@ class UiTest {
 
     @Test fun wysiwygEditsSaveMarkdownAndCanBeOpenedAgain() {
         fixture()
-        rule.onNodeWithContentDescription("Eintrag erstellen").performClick()
+        rule.onNodeWithText("Eintrag").performClick()
         rule.waitUntil(25000) { javascript("typeof editor !== 'undefined' && !!editor") == "true" }
         val markdown = "## Ein kleiner Moment\n\n**Gute Gedanken** bleiben.\n\n- Kaffee\n- frische Luft"
         javascript("editor.setMarkdown(${JSONObject.quote(markdown)})")
@@ -130,7 +130,7 @@ class UiTest {
         rule.waitUntil(10000) { diary.preferences().nextReminderAt > System.currentTimeMillis() }
         rule.waitUntil(10000) { rule.onAllNodesWithText("Einen Moment …").fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithText("Zeit für ein Backup").assertDoesNotExist()
-        rule.onNodeWithContentDescription("Einstellungen öffnen").performClick()
+        rule.onNodeWithText("Optionen").performClick()
         rule.onNodeWithText("ZIP-Backup erstellen").performScrollTo().performClick()
         rule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Checkbox)).performClick()
         rule.onAllNodes(hasSetTextAction())[0].performTextInput("Hibi-Testpasswort")
