@@ -5,6 +5,9 @@ import android.net.Uri
 import android.os.Build
 import android.view.View
 import android.view.ViewGroup
+import android.view.MotionEvent
+import android.view.InputDevice
+import android.os.SystemClock
 import android.webkit.WebView
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -16,7 +19,9 @@ import androidx.lifecycle.ViewModelStore
 import org.lvl3.hibi.ui.DiaryViewModel
 import org.lvl3.hibi.ui.EditorController
 import org.lvl3.hibi.ui.EditorRead
+import org.lvl3.hibi.ui.feedDate
 import org.json.JSONObject
+import org.json.JSONArray
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Rule
@@ -90,8 +95,38 @@ class UiTest {
     }
     private fun editorReady(): Boolean {
         var ready = false
-        rule.activityRule.scenario.onActivity { activity -> ready = (web(activity.window.decorView)?.tag as? EditorController)?.ready == true }
+        rule.activityRule.scenario.onActivity { activity -> ready = (web(activity.window.decorView)?.tag as? EditorController)?.usable == true }
         return ready
+    }
+    private fun editorDiagnostics(): String {
+        var value = "No WebView"
+        rule.activityRule.scenario.onActivity { activity ->
+            val view = web(activity.window.decorView)
+            val controller = view?.tag as? EditorController
+            value = "${controller?.diagnostics()}, actualUrl=${view?.url}, provider=${WebView.getCurrentWebViewPackage()?.versionName}"
+        }
+        return value
+    }
+    private fun waitForEditor() {
+        try { rule.waitUntil(180000) { editorReady() } }
+        catch (error: Throwable) { throw AssertionError("Native readiness failed: ${editorDiagnostics()}", error) }
+        try { assertEquals("true", javascript("typeof editor !== 'undefined' && !!editor")) }
+        catch (error: Throwable) { throw AssertionError("Engine query after native readiness failed: ${editorDiagnostics()}", error) }
+    }
+    private fun tapEditorButton(selector: String) {
+        val bounds = JSONArray(javascript("(()=>{const b=document.querySelector(${JSONObject.quote(selector)});const r=b.getBoundingClientRect();return [innerWidth,r.x+r.width/2,r.y+r.height/2];})()"))
+        var x = 0f; var y = 0f
+        rule.activityRule.scenario.onActivity { activity ->
+            val view = web(activity.window.decorView)!!; val origin = IntArray(2); view.getLocationOnScreen(origin)
+            val scale = view.width / bounds.getDouble(0)
+            x = (origin[0] + bounds.getDouble(1) * scale).toFloat(); y = (origin[1] + bounds.getDouble(2) * scale).toFloat()
+        }
+        val time = SystemClock.uptimeMillis()
+        for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+            val event = MotionEvent.obtain(time, SystemClock.uptimeMillis(), action, x, y, 0)
+            event.source = InputDevice.SOURCE_TOUCHSCREEN
+            try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true)) } finally { event.recycle() }
+        }
     }
     private fun diaryState(): String {
         var value = ""
@@ -129,26 +164,25 @@ class UiTest {
     @Test fun wysiwygEditsSaveMarkdownAndCanBeOpenedAgain() {
         fixture()
         rule.onNodeWithText("Eintrag").performClick()
-        // The first WebView renderer startup can exceed a minute on a constrained emulator host.
-        rule.waitUntil(180000) { editorReady() && javascript("typeof editor !== 'undefined' && !!editor", required = false) == "true" }
-        val markdown = "## Ein kleiner Moment\n\n**Gute Gedanken** bleiben.\n\n- Kaffee\n- frische Luft"
-        javascript("editor.setMarkdown(${JSONObject.quote(markdown)})")
-        rule.waitForIdle()
-        assertEquals("true", javascript("!!document.querySelector('.toastui-editor-ww-container h2')"))
-        assertEquals("true", javascript("!!document.querySelector('.toastui-editor-ww-container strong')"))
+        rule.activityRule.scenario.onActivity { ViewModelProvider(it)[DiaryViewModel::class.java].updateDraft { draft -> draft.copy(day = LocalDate.now().plusDays(1).toString()) } }
+        waitForEditor()
         rule.activityRule.scenario.onActivity { activity -> web(activity.window.decorView)!!.requestFocus() }
-        javascript("(()=>{const area=document.querySelector('.toastui-editor-ww-container [contenteditable=\"true\"]'); area.focus(); const range=document.createRange();range.selectNodeContents(area);range.collapse(false);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);return true;})()")
-        instrumentation.sendStringSync(" Echter Tastaturtext.")
-        rule.waitUntil(15000) { diary.draft()?.markdown?.contains("**Gute Gedanken**") == true }
+        javascript("editor.focus();true")
+        tapEditorButton(".toastui-editor-defaultUI-toolbar button.bold")
+        instrumentation.sendStringSync("Echter Tastaturtext")
         rule.waitUntil(15000) { diary.draft()?.markdown?.contains("Echter Tastaturtext") == true }
+        assertEquals("true", javascript("!!document.querySelector('.toastui-editor-ww-container strong')"))
         screenshot("04-editor-wysiwyg")
         rule.onNodeWithText("Speichern").assertIsEnabled().performClick()
-        rule.waitUntil(15000) { diary.entries().any { it.markdown.contains("**Gute Gedanken**") } }
-        val stored = diary.entries().single { it.markdown.contains("**Gute Gedanken**") }
-        assertTrue(stored.markdown.startsWith("## Ein kleiner Moment"))
-        assertTrue(stored.markdown.contains("Echter Tastaturtext"))
+        rule.waitUntil(15000) { diary.entries().any { it.markdown.contains("Echter Tastaturtext") } }
+        val stored = diary.entries().single { it.markdown.contains("Echter Tastaturtext") }
+        assertTrue(stored.markdown.contains("**Echter Tastaturtext**"))
         rule.activityRule.scenario.recreate(); rule.waitForIdle()
-        assertTrue(diary.entries().any { it.id == stored.id })
+        rule.onNodeWithText(feedDate(stored.day)).performScrollTo().performClick()
+        rule.onNodeWithContentDescription("Eintrag bearbeiten").performClick()
+        waitForEditor()
+        assertEquals(JSONObject.quote(stored.markdown), javascript("window.getMarkdown()"))
+        assertEquals("true", javascript("!!document.querySelector('.toastui-editor-ww-container strong')"))
     }
 
     @Test fun dueReminderClosesAndExportProducesEncryptedArchive() {
@@ -220,6 +254,34 @@ class UiTest {
             rule.activityRule.scenario.onActivity {
                 EditorController { _, callback -> callback(invalid) }.apply { ready = true; latest = "Bleibt" }.read { assertFalse(it.confirmed); assertEquals("Bleibt", it.markdown) }
             }
+        }
+    }
+
+    @Test fun retainedControllerSurvivesActualActivityRecreation() {
+        lateinit var controller: EditorController
+        rule.activityRule.scenario.onActivity { controller = ViewModelProvider(it)[DiaryViewModel::class.java].editorController("retention-test") }
+        rule.activityRule.scenario.recreate(); rule.waitForIdle()
+        rule.activityRule.scenario.onActivity { assertSame(controller, ViewModelProvider(it)[DiaryViewModel::class.java].editorController("retention-test")) }
+    }
+
+    @Test fun nextWebViewWaitsForOutgoingTextAndOldCallbacksCannotOverwriteNewWords() {
+        var answer: ((String) -> Unit)? = null
+        lateinit var controller: EditorController; lateinit var old: WebView; lateinit var next: WebView
+        var draft = "A"; var initialized: String? = null
+        rule.activityRule.scenario.onActivity { activity ->
+            controller = EditorController { _, callback -> answer = callback }.apply { latest = "A" }
+            old = WebView(activity); next = WebView(activity)
+            controller.attach(old, { base, text -> if (draft == base) draft = text }) { controller.ready = true }
+            controller.release(old)
+            controller.attach(next, { _, _ -> }) { initialized = controller.latest; controller.ready = true }
+            assertNull(initialized); assertTrue(controller.switching)
+            answer!!.invoke(JSONObject.quote("AB"))
+            assertEquals("AB", draft); assertEquals("AB", initialized); assertSame(next, controller.webView)
+            assertTrue(controller.usable)
+            controller.latest = "ABC"; draft = "ABC"
+            answer!!.invoke(JSONObject.quote("Old late response"))
+            assertEquals("ABC", draft); assertEquals("ABC", controller.latest)
+            controller.ready = false; controller.release(next)
         }
     }
 

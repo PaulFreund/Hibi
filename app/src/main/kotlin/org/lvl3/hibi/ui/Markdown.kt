@@ -23,30 +23,100 @@ import io.noties.markwon.ext.tasklist.TaskListPlugin
 import org.json.JSONObject
 import org.json.JSONTokener
 import org.lvl3.hibi.R
+import org.lvl3.hibi.BuildConfig
 import org.lvl3.hibi.ui.theme.HibiDesign
+import org.lvl3.hibi.model.RendererHandoff
 import java.io.ByteArrayInputStream
+import java.util.concurrent.ConcurrentLinkedQueue
 
 data class EditorRead(val markdown: String, val confirmed: Boolean)
 
 class EditorController(private val evaluator: ((String, (String) -> Unit) -> Unit)? = null) {
-    var webView: WebView? = null
+    private class Renderer(val checkpoint: (String, String) -> Unit) {
+        var retired = false
+        var released = false
+    }
+    private val renderers = mutableMapOf<WebView, Renderer>()
+    private val handoff: RendererHandoff<WebView> = RendererHandoff { outgoing, done ->
+        val base = latest
+        outgoing.clearFocus()
+        readFrom(outgoing, allowSwitch = true) { result ->
+            renderers[outgoing]?.let { record ->
+                record.checkpoint(base, result.markdown)
+                record.retired = true
+            }
+            ready = false
+            cancelStartup()
+            outgoing.removeJavascriptInterface("Hibi")
+            done() // Only now may the next renderer load and initialize with latest.
+            disposeReleased(outgoing)
+            if (handoffViewAbsent()) switching = false
+        }
+    }
+    val webView: WebView? get() = handoff.current
     var latest = ""
     var ready by mutableStateOf(false)
+    var switching by mutableStateOf(false)
+        private set
+    val usable get() = ready && !switching && failure == null
     var failure by mutableStateOf<String?>(null)
     var readIssue by mutableStateOf<String?>(null)
     var consoleError: String? = null
+    var loadPhase = "not-created"
+    var pageUrl: String? = null
+    var initializeAnswer: String? = null
+    val resources = ConcurrentLinkedQueue<String>()
     var generation by mutableIntStateOf(0)
     private val handler = Handler(Looper.getMainLooper())
+    private var startup: Runnable? = null
+    private fun handoffViewAbsent(): Boolean = webView == null && !handoff.waiting
+    fun attach(view: WebView, checkpoint: (String, String) -> Unit, load: () -> Unit) {
+        renderers[view] = Renderer(checkpoint)
+        switching = true
+        handoff.attach(view) {
+            switching = false; ready = false; failure = null; consoleError = null
+            loadPhase = "loading-assets"; initializeAnswer = null; resources.clear()
+            startup = Runnable { if (webView === view && !ready) fail(view, "Der Schreibbereich antwortet nicht. Bitte lade ihn erneut.") }
+            handler.postDelayed(startup!!, 30000)
+            load()
+        }
+    }
+    fun release(view: WebView) {
+        val record = renderers[view] ?: return
+        record.released = true
+        switching = true
+        handoff.release(view)
+        if (webView !== view && !record.retired) record.retired = true
+        disposeReleased(view)
+        switching = handoff.waiting
+    }
+    private fun disposeReleased(view: WebView) {
+        val record = renderers[view] ?: return
+        if (record.released && record.retired) {
+            renderers.remove(view); view.removeJavascriptInterface("Hibi"); view.destroy()
+        }
+    }
+    fun rendererReady(view: WebView) {
+        if (webView === view && failure == null) { ready = true; loadPhase = "ready"; cancelStartup() }
+    }
+    fun fail(view: WebView, message: String) {
+        if (webView === view) { ready = false; failure = message; loadPhase = "failed"; cancelStartup() }
+    }
+    private fun cancelStartup() { startup?.let(handler::removeCallbacks); startup = null }
+    fun diagnostics() = "ready=$ready, switching=$switching, phase=$loadPhase, url=$pageUrl, initialize=$initializeAnswer, failure=$failure, console=$consoleError, resources=${resources.toList()}, renderer=${webView?.let(System::identityHashCode)}, latestLength=${latest.length}"
     fun read(callback: (EditorRead) -> Unit) {
-        val view = webView
+        if (!usable) { callback(EditorRead(latest, false)); return }
+        readFrom(webView, allowSwitch = false, callback)
+    }
+    private fun readFrom(view: WebView?, allowSwitch: Boolean, callback: (EditorRead) -> Unit) {
         if (!ready || (view == null && evaluator == null)) { callback(EditorRead(latest, false)); return }
         var completed = false
         fun finish(value: String?) {
             if (completed) return
             completed = true
-            val confirmed = value != null && webView === view && ready
+            val confirmed = value != null && webView === view && ready && (allowSwitch || !switching)
             if (confirmed) { latest = value!!; readIssue = null }
-            else readIssue = "Der aktuelle Text konnte nicht bestätigt werden. Bitte versuche es erneut."
+            else if (webView === view && !allowSwitch) readIssue = "Der aktuelle Text konnte nicht bestätigt werden. Bitte versuche es erneut."
             callback(EditorRead(latest, confirmed))
         }
         val timeout = Runnable { finish(null) }
@@ -62,7 +132,7 @@ class EditorController(private val evaluator: ((String, (String) -> Unit) -> Uni
             handler.removeCallbacks(timeout); finish(null)
         }
     }
-    fun retry() { ready = false; failure = null; readIssue = null; generation++ }
+    fun retry() { cancelStartup(); ready = false; failure = null; readIssue = null; generation++ }
 }
 
 class EditorBridge(private val changed: (String) -> Unit, private val ready: () -> Unit, private val failed: (String) -> Unit) {
@@ -91,9 +161,7 @@ fun MarkdownEditor(id: String, initial: String, controller: EditorController, mo
             WebView(it).apply {
                 val owner = this
                 tag = controller
-                // On a renderer retry use the last bridge value, not a stale constructor value.
-                if (controller.generation == 0) controller.latest = initial
-                controller.webView = this; controller.ready = false
+                if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
                 setBackgroundColor(ContextCompat.getColor(context, R.color.hibi_surface))
                 settings.javaScriptEnabled = true
                 settings.allowFileAccess = false; settings.allowContentAccess = false
@@ -107,15 +175,16 @@ fun MarkdownEditor(id: String, initial: String, controller: EditorController, mo
                         return true
                     }
                 }
-                fun fail(message: String) { if (controller.webView === owner) { controller.ready = false; controller.failure = message } }
+                fun fail(message: String) = controller.fail(owner, message)
                 addJavascriptInterface(EditorBridge(
                     changed = { value -> if (controller.webView === owner && controller.ready) { controller.latest = value; callback(value) } },
-                    ready = { if (controller.webView === owner) controller.ready = true }, failed = ::fail), "Hibi")
+                    ready = { controller.rendererReady(owner) }, failed = ::fail), "Hibi")
                 webViewClient = object : WebViewClient() {
                     override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse {
                         val uri = request.url; val prefix = "/assets/editor/"
                         val file = uri.path?.removePrefix(prefix).orEmpty()
                         if (uri.scheme == "https" && uri.host == "appassets.androidplatform.net" && uri.path?.startsWith(prefix) == true && file in setOf("editor.html", "hibi-editor.js", "toastui-editor-all.min.js", "toastui-editor.min.css", "de-de.js")) {
+                            controller.resources.add(file)
                             val mime = when { file.endsWith(".css") -> "text/css"; file.endsWith(".js") -> "application/javascript"; else -> "text/html" }
                             return WebResourceResponse(mime, "UTF-8", context.assets.open("editor/$file"))
                         }
@@ -123,31 +192,35 @@ fun MarkdownEditor(id: String, initial: String, controller: EditorController, mo
                     }
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest) = true
                     override fun onPageFinished(view: WebView, url: String) {
-                        if (controller.webView !== view) return
+                        if (controller.webView !== view || controller.failure != null) return
+                        controller.pageUrl = url; controller.loadPhase = "initialize-called"
                         fun color(resource: Int) = String.format("#%06X", 0xFFFFFF and ContextCompat.getColor(context, resource))
                         val colors = JSONObject().put("paper", color(R.color.hibi_surface)).put("ink", color(R.color.hibi_ink))
                             .put("accent", color(R.color.hibi_accent)).put("line", color(R.color.hibi_outline)).put("muted", color(R.color.hibi_muted))
                             .put("body-font", HibiDesign.bodyFamily).put("heading-font", HibiDesign.headingFamily).put("body-size", "${HibiDesign.bodySize}px")
-                        view.evaluateJavascript("window.initialize(${JSONObject.quote(controller.latest)},$colors)", null)
+                        view.evaluateJavascript("window.initialize(${JSONObject.quote(controller.latest)},$colors)") { answer ->
+                            if (controller.webView === view) {
+                                controller.initializeAnswer = answer
+                                if (answer != "true") fail("Der Schreibbereich konnte nicht gestartet werden. Bitte lade ihn erneut.")
+                            }
+                        }
                     }
                     override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                        controller.resources.add("error:${request?.url?.lastPathSegment}:${error?.errorCode}")
                         if (request?.isForMainFrame == true) fail("Der Schreibbereich konnte nicht geladen werden.")
+                    }
+                    override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, response: WebResourceResponse?) {
+                        controller.resources.add("http:${request?.url?.lastPathSegment}:${response?.statusCode}")
                     }
                     override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
                         fail("Der Schreibbereich wurde beendet. Bitte lade ihn erneut.")
                         return true // Compose removes the failed AndroidView and destroys it below.
                     }
                 }
-                loadUrl("https://appassets.androidplatform.net/assets/editor/editor.html")
+                controller.attach(this, checkpoint) { loadUrl("https://appassets.androidplatform.net/assets/editor/editor.html") }
             }
         }, onReset = null, onRelease = { view ->
-            val base = controller.latest
-            // Keep the outgoing renderer alive until its final snapshot (or bounded failure).
-            controller.read { result ->
-                checkpoint(base, result.markdown)
-                if (controller.webView === view) { controller.webView = null; controller.ready = false }
-                view.removeJavascriptInterface("Hibi"); view.destroy()
-            }
+            controller.release(view)
         }, update = { view -> view.settings.textZoom = (fontScale * 100).toInt() })
     }
 }

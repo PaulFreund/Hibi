@@ -48,6 +48,8 @@ Große Texte und Entwurf-JSON werden in begrenzten Byteabschnitten aus SQLite ge
 
 Speichern und Schließen benötigen einen bestätigten Text aus dem Schreibbereich. Bei einem Lesefehler bleibt der Editor offen und bietet Wiederholung an. Entwurf-Checkpoints sichern Änderungen bei App-Wechseln und vor der Fotoauswahl; die Auswahl öffnet erst nach abgeschlossener Entwurfspersistierung. Nach Rotation bleibt die gewählte ZIP-Verschlüsselung erhalten, Passwörter müssen erneut eingegeben werden.
 
+Der Editor-Controller bleibt im ViewModel über Activity-Neuerstellungen erhalten. Beim Rendererwechsel wird zuerst der Abschluss-Snapshot der alten WebView übernommen; erst danach lädt und initialisiert die neue WebView den aktuellen Text. Antworten eines abgelösten Renderers werden ignoriert. Ein expliziter Text-Read sendet zusätzlich einen unabhängigen Entwurf-Checkpoint, damit eine verworfene Read-Antwort keine ausstehende Textsicherung unterdrückt. Bei einem Initialisierungsstillstand bietet der Schreibbereich eine Wiederholung an. Die untere Formatleiste öffnet ihr Überlaufmenü nach oben und verwendet größere, beschriftete Trefferflächen.
+
 ## Backup-Verhalten
 
 In den Einstellungen den ZIP-Export öffnen und optional ein Passwort vergeben. **ZIP-Datei direkt speichern** schreibt ohne lokale ZIP-Kopie in das gewählte Dateiziel. **ZIP erstellen** erzeugt eine einzelne temporäre ZIP zum anschließenden Teilen. OneDrive, Google Drive oder eine andere Ziel-App übernimmt den Upload und ihre WLAN-/Mobilfunkeinstellungen. Hibi zeigt **Letzter Export** und bestätigt keinen Cloud-Upload. Nach einer Neuinstallation **ZIP-Backup importieren** wählen.

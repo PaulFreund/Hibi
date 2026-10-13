@@ -42,6 +42,13 @@ class DiaryViewModel(application: Application, private val saved: SavedStateHand
     private val mutex = (application as HibiApplication).diaryMutex
     private val backup = ZipBackup()
     private var draftJob: Job? = null
+    private var editor: Pair<String, EditorController>? = null
+    fun editorController(id: String): EditorController {
+        val current = editor?.takeIf { it.first == id }?.second
+        return (current ?: EditorController().also { editor = id to it }).also {
+            if (it.webView == null && !it.switching) it.latest = mutable.value.draft?.takeIf { draft -> draft.id == id }?.markdown.orEmpty()
+        }
+    }
     private var activeWork: Job? = null
     private var pendingSavePassword: CharArray? = null
     private val exports = File(application.cacheDir, "exports").apply { mkdirs() }

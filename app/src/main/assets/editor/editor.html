@@ -18,6 +18,10 @@ html,body,#editor { margin:0; height:100%; overflow:hidden; background:var(--pap
 .toastui-editor-ww-container .toastui-editor { padding:10px 14px; }
 .toastui-editor-toolbar-icons { opacity:.8; }
 .toastui-editor-popup { box-sizing:border-box; max-width:calc(100vw - 24px); top:auto!important; bottom:56px!important; max-height:calc(100% - 70px); overflow-y:auto; }
+.toastui-editor-defaultUI-toolbar { position:relative; }
+.toastui-editor-dropdown-toolbar { top:auto!important; bottom:100%!important; max-width:calc(100vw - 16px)!important; height:auto; flex-wrap:wrap; overflow-y:auto; max-height:calc(100vh - 72px); }
+.toastui-editor-defaultUI-toolbar button, .toastui-editor-dropdown-toolbar button { width:48px; height:48px; margin:0; border-width:1px; background-origin:content-box; background-clip:content-box; padding:11px; box-sizing:border-box; }
+.toastui-editor-toolbar-item-wrapper { min-width:48px; height:48px; margin:0; }
 .toastui-editor-popup,.toastui-editor-dropdown-toolbar { background:var(--paper); color:var(--ink); border-color:var(--line); }
 .toastui-editor-popup input { background:var(--paper); color:var(--ink); border-color:var(--line); }
 .toastui-editor-popup button.toastui-editor-ok { background:var(--accent); color:var(--paper); }

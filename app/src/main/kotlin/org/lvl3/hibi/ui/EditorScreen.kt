@@ -30,7 +30,7 @@ import java.time.ZoneOffset
 fun EditorScreen(draft: Entry, vm: DiaryViewModel, modifier: Modifier, pickPhotos: () -> Unit) {
     val state by vm.state.collectAsState()
     val editing = state.entries.any { it.id == draft.id }
-    val controller = remember(draft.id) { EditorController().apply { latest = draft.markdown } }
+    val controller = remember(vm, draft.id) { vm.editorController(draft.id) }
     var reading by remember(draft.id) { mutableStateOf(false) }
     var datePicker by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
@@ -69,7 +69,7 @@ fun EditorScreen(draft: Entry, vm: DiaryViewModel, modifier: Modifier, pickPhoto
                     DropdownMenuItem(text = { Text("Entwurf verwerfen") }, onClick = { menu = false; discard = true })
                 }
             }
-            Button(onClick = { read(vm::saveDraft) }, enabled = controller.ready && !reading && !state.busy && (draft.markdown.isNotBlank() || draft.photos.isNotEmpty())) { Text("Speichern") }
+            Button(onClick = { read(vm::saveDraft) }, enabled = controller.usable && !reading && !state.busy && (draft.markdown.isNotBlank() || draft.photos.isNotEmpty())) { Text("Speichern") }
         }
         HorizontalDivider()
         Row(Modifier.fillMaxWidth().padding(horizontal = HibiDesign.pagePadding), verticalAlignment = Alignment.CenterVertically) {
@@ -107,7 +107,7 @@ fun EditorScreen(draft: Entry, vm: DiaryViewModel, modifier: Modifier, pickPhoto
                 }
             }
         }
-        if (!controller.ready && controller.failure == null) Text("Schreibbereich wird geladen · Entwurf bleibt erhalten", Modifier.padding(horizontal = HibiDesign.pagePadding), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (!controller.usable && controller.failure == null) Text("Schreibbereich wird geladen · Entwurf bleibt erhalten", Modifier.padding(horizontal = HibiDesign.pagePadding), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         controller.readIssue?.let { Text(it, Modifier.padding(horizontal = HibiDesign.pagePadding), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         MarkdownEditor(draft.id, draft.markdown, controller, Modifier.fillMaxWidth().weight(1f), checkpoint = { base, text -> vm.persistEditorSnapshot(draft.id, base, text) }) { text -> vm.updateDraftText(draft.id, text) }
     }
