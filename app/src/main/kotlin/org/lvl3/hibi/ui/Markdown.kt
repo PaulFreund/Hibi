@@ -36,7 +36,6 @@ class EditorController(private val evaluator: ((String, (String) -> Unit) -> Uni
     private class Renderer(val checkpoint: (String, String) -> Unit) {
         var retired = false
         var released = false
-        var wasReady = false
     }
     private class Recovery(val view: WebView, val base: String, val done: () -> Unit) { var read = 0 }
     private val renderers = mutableMapOf<WebView, Renderer>()
@@ -46,9 +45,7 @@ class EditorController(private val evaluator: ((String, (String) -> Unit) -> Uni
         cancelStartup()
         val pending = Recovery(outgoing, latest, done)
         recovery = pending
-        // A renderer which never became ready could not accept edits.
-        if (!ready && renderers[outgoing]?.wasReady != true) completeRecovery(pending)
-        else requestRecovery(pending)
+        requestRecovery(pending)
     }
     val webView: WebView? get() = handoff.current
     var latest = ""
@@ -98,7 +95,10 @@ class EditorController(private val evaluator: ((String, (String) -> Unit) -> Uni
         }
     }
     fun rendererReady(view: WebView) {
-        if (webView === view && failure == null) { renderers[view]?.wasReady = true; ready = true; loadPhase = "ready"; cancelStartup() }
+        if (webView === view && failure == null) {
+            ready = true; loadPhase = "ready"; cancelStartup()
+            recovery?.takeIf { it.view === view }?.let(::requestRecovery)
+        }
     }
     fun fail(view: WebView, message: String) {
         if (webView === view) {
@@ -134,11 +134,12 @@ class EditorController(private val evaluator: ((String, (String) -> Unit) -> Uni
     /** Called only after the user confirms that unreceived words may be missing. */
     fun useStoredDraft() {
         val pending = recovery
-        if (pending != null) completeRecovery(pending)
+        if (pending != null) { failure = null; completeRecovery(pending) }
         else if (recoveryIssue != null) { recoveryIssue = null; failure = null; readIssue = null; generation++ }
     }
     fun rendererChanged(view: WebView, value: String, changed: (String) -> Unit) {
-        if (webView !== view || !ready) return
+        // A JS checkpoint may reach the UI thread before its posted Ready notification.
+        if (webView !== view || failure != null) return
         latest = value; changed(value)
         recovery?.takeIf { it.view === view }?.let(::completeRecovery)
     }

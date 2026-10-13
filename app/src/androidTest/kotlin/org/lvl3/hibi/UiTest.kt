@@ -18,6 +18,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import org.lvl3.hibi.ui.DiaryViewModel
 import org.lvl3.hibi.ui.EditorController
+import org.lvl3.hibi.ui.EditorBridge
 import org.lvl3.hibi.ui.EditorRead
 import org.lvl3.hibi.ui.feedDate
 import org.json.JSONObject
@@ -281,7 +282,7 @@ class UiTest {
             controller.latest = "ABC"; draft = "ABC"
             answer!!.invoke(JSONObject.quote("Old late response"))
             assertEquals("ABC", draft); assertEquals("ABC", controller.latest)
-            controller.ready = false; controller.release(next)
+            controller.dispose()
         }
     }
 
@@ -304,7 +305,7 @@ class UiTest {
                 var read: EditorRead? = null; controller.read { read = it }
                 assertFalse(read!!.confirmed); assertEquals("A", draft)
                 when (kind) {
-                    "missing" -> { controller.retryRecovery(); answers.last().invoke(JSONObject.quote("AB")) }
+                    "missing", "invalid" -> { controller.retryRecovery(); answers.last().invoke(JSONObject.quote("AB")) }
                     "checkpoint" -> controller.rendererChanged(old, "AB") { draft = it }
                     else -> answers.first().invoke(JSONObject.quote("AB"))
                 }
@@ -340,6 +341,44 @@ class UiTest {
             answers.last().invoke(JSONObject.quote("Old retry"))
             assertEquals("ABC", controller.latest)
             controller.dispose()
+        }
+    }
+
+    @Test fun delayedNativeReadyAndCheckpointCannotStartAnUnconfirmedCachedSuccessor() {
+        for (order in listOf("ready-first", "change-first", "missing")) {
+            lateinit var controller: EditorController; lateinit var old: WebView; lateinit var next: WebView
+            lateinit var bridge: EditorBridge
+            var draft = "A"; var initialized: String? = null; var reads = 0
+            rule.activityRule.scenario.onActivity { activity ->
+                controller = EditorController { _, callback -> reads++; callback(JSONObject.quote("AB")) }.apply { latest = "A" }
+                old = WebView(activity); next = WebView(activity)
+                controller.attach(old, { base, text -> if (draft == base) draft = text }) {}
+                bridge = EditorBridge({ text -> controller.rendererChanged(old, text) { draft = it } }, { controller.rendererReady(old) }, { controller.fail(old, it) })
+                if (order == "ready-first") { bridge.onReady(); bridge.onChange("AB") }
+                if (order == "change-first") { bridge.onChange("AB"); bridge.onReady() }
+                // Bridge callbacks are posted, so neither has been delivered during this UI call.
+                controller.release(old)
+                controller.attach(next, { _, _ -> }) { initialized = controller.latest; controller.rendererReady(next) }
+                assertNull(initialized); assertFalse(controller.usable); assertSame(old, controller.webView)
+                assertNotNull(controller.recoveryIssue); assertEquals(0, reads)
+            }
+            if (order == "missing") rule.activityRule.scenario.onActivity {
+                assertNull(initialized); assertFalse(controller.usable)
+                controller.useStoredDraft(); assertEquals("A", initialized)
+                controller.dispose()
+            } else {
+                rule.waitUntil(5000) { initialized != null }
+                rule.activityRule.scenario.onActivity {
+                    assertEquals("AB", draft); assertEquals("AB", initialized); assertTrue(controller.usable)
+                    controller.rendererChanged(next, "ABC") { draft = it }
+                    bridge.onChange("Old queued checkpoint"); bridge.onReady()
+                }
+                rule.waitForIdle()
+                rule.activityRule.scenario.onActivity {
+                    assertEquals("ABC", controller.latest); assertEquals("ABC", draft)
+                    controller.dispose()
+                }
+            }
         }
     }
 
