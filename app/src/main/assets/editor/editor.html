@@ -4,7 +4,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'">
 <link rel="stylesheet" href="toastui-editor.min.css">
 <style>
-:root { --paper:#fffdf9; --ink:#35463e; --accent:#974b36; --line:#707b73; --muted:#56635b; }
+:root { --paper:#fffdf9; --ink:#35463e; --accent:#006fca; --line:#707b73; --muted:#56635b; }
 html,body,#editor { margin:0; height:100%; overflow:hidden; background:var(--paper); color:var(--ink); font-size:var(--body-size,16px); font-family:var(--body-font,sans-serif); }
 .toastui-editor-defaultUI { border:0; font-family:inherit; display:flex; flex-direction:column; }
 .toastui-editor-toolbar { order:2; flex-shrink:0; height:auto; min-height:48px; }
@@ -24,7 +24,7 @@ html,body,#editor { margin:0; height:100%; overflow:hidden; background:var(--pap
 .toastui-editor-toolbar-item-wrapper { min-width:48px; height:48px; margin:0; }
 .toastui-editor-popup,.toastui-editor-dropdown-toolbar { background:var(--paper); color:var(--ink); border-color:var(--line); }
 .toastui-editor-popup input { background:var(--paper); color:var(--ink); border-color:var(--line); }
-.toastui-editor-popup button.toastui-editor-ok { background:var(--accent); color:var(--paper); }
+.toastui-editor-popup button.toastui-editor-ok-button, .toastui-editor-popup button.toastui-editor-ok-button:hover { background:var(--accent); color:var(--paper); }
 .toastui-editor-md-tab-container { display:none!important; }
 </style></head><body><div id="editor"></div>
 <script src="toastui-editor-all.min.js"></script><script src="de-de.js"></script>

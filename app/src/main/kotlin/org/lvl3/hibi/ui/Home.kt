@@ -203,7 +203,7 @@ private fun WelcomeScreen(modifier: Modifier, start: () -> Unit, restore: () -> 
     Column(modifier.fillMaxSize().padding(30.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(Icons.Outlined.FavoriteBorder, null, Modifier.size(68.dp), tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(24.dp))
-        Text("Ein Ort für deine Tage", style = MaterialTheme.typography.headlineMedium)
+        Text("Dein Tagebuch", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(12.dp))
         Text("Bilder, Worte und kleine Momente. Dein Tagebuch bleibt bei dir.", textAlign = TextAlign.Center)
         Spacer(Modifier.height(28.dp))
@@ -271,7 +271,7 @@ private fun CalendarDialog(entries: List<Entry>, selected: String?, close: () ->
         Surface(Modifier.padding(18.dp).widthIn(max = 480.dp).fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
             Column(Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Deine Tage", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                    Text("Dein Tagebuch", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
                     IconButton(onClick = close) { Icon(Icons.Outlined.Close, "Kalender schließen") }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
