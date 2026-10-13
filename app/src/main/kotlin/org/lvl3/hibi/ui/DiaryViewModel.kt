@@ -77,7 +77,7 @@ class DiaryViewModel(application: Application, private val saved: SavedStateHand
         }
         val draft = current ?: entry ?: Entry()
         mutable.update { it.copy(draft = draft, requestedEntry = null) }
-        setEditorOpen(true); persistDraft(draft)
+        setEditorOpen(true); flushDraft(draft.id)
     }
     fun resumeDraft() { openEditor() }
     fun cancelEditorRequest() { mutable.update { it.copy(requestedEntry = null) } }
@@ -92,6 +92,29 @@ class DiaryViewModel(application: Application, private val saved: SavedStateHand
     fun updateDraft(transform: (Entry) -> Entry) {
         val draft = mutable.value.draft?.let(transform) ?: return
         mutable.update { it.copy(draft = draft) }; persistDraft(draft)
+    }
+    fun updateDraftText(id: String, text: String) {
+        if (mutable.value.editorOpen && mutable.value.draft?.id == id) updateDraft { it.copy(markdown = text) }
+    }
+    fun persistEditorSnapshot(id: String, base: String, text: String) {
+        if (mutable.value.draft?.id != id) return
+        // A late outgoing-renderer response must not overwrite newer words or another draft.
+        mutable.update { state ->
+            val draft = state.draft
+            if (draft?.id == id && draft.markdown == base) state.copy(draft = draft.copy(markdown = text)) else state
+        }
+        flushDraft(id)
+    }
+    fun flushDraft(id: String, after: (() -> Unit)? = null) {
+        if (mutable.value.draft?.id != id) return
+        draftJob?.cancel()
+        work {
+            val draft = mutable.value.draft?.takeIf { it.id == id } ?: return@work
+            diary.setDraft(draft)
+            if (after != null) withContext(Dispatchers.Main.immediate) {
+                if (mutable.value.editorOpen && mutable.value.draft?.id == id) after()
+            }
+        }
     }
     private fun persistDraft(draft: Entry) {
         draftJob?.cancel()
@@ -124,7 +147,7 @@ class DiaryViewModel(application: Application, private val saved: SavedStateHand
             val draft = mutable.value.draft?.takeIf { it.id == id } ?: error("Der Entwurf wurde inzwischen gewechselt")
             // Publishing may fail independently of draft persistence; retain the latest words first.
             diary.setDraft(draft)
-            val entry = draft.copy(markdown = draft.markdown.trim(), updatedAt = System.currentTimeMillis().coerceAtLeast(draft.createdAt))
+            val entry = draft.copy(updatedAt = System.currentTimeMillis().coerceAtLeast(draft.createdAt))
             diary.save(entry); mutable.update { it.copy(draft = null) }; setEditorOpen(false)
             refresh(); message("Eintrag gespeichert")
         }

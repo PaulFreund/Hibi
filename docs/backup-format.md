@@ -1,6 +1,6 @@
 # Hibi ZIP, Version 1
 
-Dateien sind UTF-8, Bilder enthalten unveränderte Originalbytes. Pfade verwenden `/`.
+Manifest und Markdown sind UTF-8, Bilder enthalten unveränderte Originalbytes. Pfade verwenden `/`. Ungültige UTF-8-Sequenzen werden vor der Übernahme abgelehnt, auch bei passender SHA-256-Prüfsumme; es werden keine Textbytes still durch Ersatzzeichen verändert.
 
 ```text
 manifest.json

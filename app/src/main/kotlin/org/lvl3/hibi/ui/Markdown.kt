@@ -26,33 +26,43 @@ import org.lvl3.hibi.R
 import org.lvl3.hibi.ui.theme.HibiDesign
 import java.io.ByteArrayInputStream
 
-class EditorController {
+data class EditorRead(val markdown: String, val confirmed: Boolean)
+
+class EditorController(private val evaluator: ((String, (String) -> Unit) -> Unit)? = null) {
     var webView: WebView? = null
     var latest = ""
     var ready by mutableStateOf(false)
     var failure by mutableStateOf<String?>(null)
+    var readIssue by mutableStateOf<String?>(null)
+    var consoleError: String? = null
     var generation by mutableIntStateOf(0)
     private val handler = Handler(Looper.getMainLooper())
-    fun read(callback: (String) -> Unit) {
+    fun read(callback: (EditorRead) -> Unit) {
         val view = webView
-        if (view == null || !ready) { callback(latest); return }
+        if (!ready || (view == null && evaluator == null)) { callback(EditorRead(latest, false)); return }
         var completed = false
-        val timeout = Runnable { if (!completed) { completed = true; callback(latest) } }
+        fun finish(value: String?) {
+            if (completed) return
+            completed = true
+            val confirmed = value != null && webView === view && ready
+            if (confirmed) { latest = value!!; readIssue = null }
+            else readIssue = "Der aktuelle Text konnte nicht bestätigt werden. Bitte versuche es erneut."
+            callback(EditorRead(latest, confirmed))
+        }
+        val timeout = Runnable { finish(null) }
         handler.postDelayed(timeout, 1500)
         try {
-            view.evaluateJavascript("window.getMarkdown()") { encoded ->
-                if (!completed) {
-                    completed = true; handler.removeCallbacks(timeout)
-                    val value = runCatching { JSONTokener(encoded).nextValue() as? String }.getOrNull()
-                    if (webView === view && value != null) latest = value
-                    callback(latest)
-                }
+            val answer: (String) -> Unit = { encoded ->
+                handler.removeCallbacks(timeout)
+                finish(runCatching { JSONTokener(encoded).nextValue() as? String }.getOrNull())
             }
+            if (evaluator != null) evaluator.invoke("window.getMarkdown()", answer)
+            else view!!.evaluateJavascript("window.getMarkdown()") { answer(it) }
         } catch (_: Exception) {
-            if (!completed) { completed = true; handler.removeCallbacks(timeout); callback(latest) }
+            handler.removeCallbacks(timeout); finish(null)
         }
     }
-    fun retry() { ready = false; failure = null; generation++ }
+    fun retry() { ready = false; failure = null; readIssue = null; generation++ }
 }
 
 class EditorBridge(private val changed: (String) -> Unit, private val ready: () -> Unit, private val failed: (String) -> Unit) {
@@ -64,7 +74,7 @@ class EditorBridge(private val changed: (String) -> Unit, private val ready: () 
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun MarkdownEditor(id: String, initial: String, controller: EditorController, modifier: Modifier, changed: (String) -> Unit) {
+fun MarkdownEditor(id: String, initial: String, controller: EditorController, modifier: Modifier, checkpoint: (String, String) -> Unit = { _, _ -> }, changed: (String) -> Unit) {
     val context = LocalContext.current
     val fontScale = LocalConfiguration.current.fontScale
     val callback by rememberUpdatedState(changed)
@@ -80,6 +90,7 @@ fun MarkdownEditor(id: String, initial: String, controller: EditorController, mo
         AndroidView(modifier = modifier, factory = {
             WebView(it).apply {
                 val owner = this
+                tag = controller
                 // On a renderer retry use the last bridge value, not a stale constructor value.
                 if (controller.generation == 0) controller.latest = initial
                 controller.webView = this; controller.ready = false
@@ -90,6 +101,12 @@ fun MarkdownEditor(id: String, initial: String, controller: EditorController, mo
                 settings.textZoom = (fontScale * 100).toInt()
                 settings.blockNetworkLoads = true
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                        if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) controller.consoleError = message.message()
+                        return true
+                    }
+                }
                 fun fail(message: String) { if (controller.webView === owner) { controller.ready = false; controller.failure = message } }
                 addJavascriptInterface(EditorBridge(
                     changed = { value -> if (controller.webView === owner && controller.ready) { controller.latest = value; callback(value) } },
@@ -124,8 +141,13 @@ fun MarkdownEditor(id: String, initial: String, controller: EditorController, mo
                 loadUrl("https://appassets.androidplatform.net/assets/editor/editor.html")
             }
         }, onReset = null, onRelease = { view ->
-            if (controller.webView === view) { controller.webView = null; controller.ready = false }
-            view.removeJavascriptInterface("Hibi"); view.destroy()
+            val base = controller.latest
+            // Keep the outgoing renderer alive until its final snapshot (or bounded failure).
+            controller.read { result ->
+                checkpoint(base, result.markdown)
+                if (controller.webView === view) { controller.webView = null; controller.ready = false }
+                view.removeJavascriptInterface("Hibi"); view.destroy()
+            }
         }, update = { view -> view.settings.textZoom = (fontScale * 100).toInt() })
     }
 }

@@ -15,6 +15,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import org.lvl3.hibi.ui.DiaryViewModel
 import org.lvl3.hibi.ui.EditorController
+import org.lvl3.hibi.ui.EditorRead
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Before
@@ -76,14 +77,30 @@ class UiTest {
     }
     private fun javascript(expression: String, required: Boolean = true): String {
         var result = "null"; val completed = CountDownLatch(1)
+        var controller: EditorController? = null
         rule.activityRule.scenario.onActivity { activity ->
             val view = web(activity.window.decorView)
+            controller = view?.tag as? EditorController
             if (view == null) completed.countDown() else view.evaluateJavascript(expression) { value -> result = value; completed.countDown() }
         }
         val answered = completed.await(8, TimeUnit.SECONDS)
-        if (required) assertTrue("JavaScript callback timed out", answered)
+        if (required) assertTrue("JavaScript callback timed out: nativeReady=${controller?.ready}, latestLength=${controller?.latest?.length}, rendererFailure=${controller?.failure}, consoleError=${controller?.consoleError}, expression=$expression", answered)
         if (!answered) return "null" // Readiness polling tolerates a cold renderer; feature reads remain required.
         return result
+    }
+    private fun editorReady(): Boolean {
+        var ready = false
+        rule.activityRule.scenario.onActivity { activity -> ready = (web(activity.window.decorView)?.tag as? EditorController)?.ready == true }
+        return ready
+    }
+    private fun diaryState(): String {
+        var value = ""
+        rule.activityRule.scenario.onActivity { activity ->
+            val state = ViewModelProvider(activity)[DiaryViewModel::class.java].state.value
+            val files = File(app.cacheDir, "exports").listFiles().orEmpty().joinToString { it.name + ":" + it.length() }
+            value = "busy=${state.busy}, operation=${state.operation}, message=${state.message}, export=${state.export}, archiveFiles=$files"
+        }
+        return value
     }
 
     @Test fun feedCalendarSearchAndImageSettingWorkWithOriginalPhotos() {
@@ -113,18 +130,23 @@ class UiTest {
         fixture()
         rule.onNodeWithText("Eintrag").performClick()
         // The first WebView renderer startup can exceed a minute on a constrained emulator host.
-        rule.waitUntil(180000) { javascript("typeof editor !== 'undefined' && !!editor", required = false) == "true" }
+        rule.waitUntil(180000) { editorReady() && javascript("typeof editor !== 'undefined' && !!editor", required = false) == "true" }
         val markdown = "## Ein kleiner Moment\n\n**Gute Gedanken** bleiben.\n\n- Kaffee\n- frische Luft"
         javascript("editor.setMarkdown(${JSONObject.quote(markdown)})")
         rule.waitForIdle()
         assertEquals("true", javascript("!!document.querySelector('.toastui-editor-ww-container h2')"))
         assertEquals("true", javascript("!!document.querySelector('.toastui-editor-ww-container strong')"))
+        rule.activityRule.scenario.onActivity { activity -> web(activity.window.decorView)!!.requestFocus() }
+        javascript("(()=>{const area=document.querySelector('.toastui-editor-ww-container [contenteditable=\"true\"]'); area.focus(); const range=document.createRange();range.selectNodeContents(area);range.collapse(false);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);return true;})()")
+        instrumentation.sendStringSync(" Echter Tastaturtext.")
         rule.waitUntil(15000) { diary.draft()?.markdown?.contains("**Gute Gedanken**") == true }
+        rule.waitUntil(15000) { diary.draft()?.markdown?.contains("Echter Tastaturtext") == true }
         screenshot("04-editor-wysiwyg")
         rule.onNodeWithText("Speichern").assertIsEnabled().performClick()
         rule.waitUntil(15000) { diary.entries().any { it.markdown.contains("**Gute Gedanken**") } }
         val stored = diary.entries().single { it.markdown.contains("**Gute Gedanken**") }
         assertTrue(stored.markdown.startsWith("## Ein kleiner Moment"))
+        assertTrue(stored.markdown.contains("Echter Tastaturtext"))
         rule.activityRule.scenario.recreate(); rule.waitForIdle()
         assertTrue(diary.entries().any { it.id == stored.id })
     }
@@ -146,7 +168,8 @@ class UiTest {
         rule.onAllNodes(hasSetTextAction())[1].performTextInput("Hibi-Testpasswort")
         screenshot("06-zip-passwort")
         rule.onNodeWithText("ZIP erstellen").performClick()
-        rule.waitUntil(20000) { rule.onAllNodesWithText("Deine ZIP ist bereit").fetchSemanticsNodes().isNotEmpty() }
+        try { rule.waitUntil(20000) { rule.onAllNodesWithText("Deine ZIP ist bereit").fetchSemanticsNodes().isNotEmpty() } }
+        catch (error: Throwable) { throw AssertionError("Export did not reach ready dialog: ${diaryState()}", error) }
         rule.onNodeWithText("Deine ZIP ist bereit").assertExists()
         screenshot("07-zip-bereit")
         assertNull("Creating an unshared ZIP must not count as external export", diary.preferences().lastExportAt)
@@ -173,11 +196,71 @@ class UiTest {
     }
 
     @Test fun unreadyEditorReadRetainsRestoredTextInsteadOfReturningEmptyMarkdown() {
-        var result = ""
+        var result: EditorRead? = null
         rule.activityRule.scenario.onActivity {
             EditorController().apply { latest = "**Wiederhergestellte Worte**" }.read { value -> result = value }
         }
-        assertEquals("**Wiederhergestellte Worte**", result)
+        assertEquals("**Wiederhergestellte Worte**", result!!.markdown)
+        assertFalse("Cached text is not a confirmed renderer read", result!!.confirmed)
+    }
+
+    @Test fun timedOutReadNeverConfirmsCacheOrAcceptsALateAnswer() {
+        var answer: ((String) -> Unit)? = null; var result: EditorRead? = null; var callbacks = 0
+        lateinit var controller: EditorController
+        rule.activityRule.scenario.onActivity {
+            controller = EditorController { _, callback -> answer = callback }.apply { latest = "Letzter bestätigter Text"; ready = true }
+            controller.read { result = it; callbacks++ }
+        }
+        rule.waitUntil(5000) { result != null }
+        assertFalse(result!!.confirmed); assertEquals("Letzter bestätigter Text", result!!.markdown)
+        rule.activityRule.scenario.onActivity { answer!!.invoke(JSONObject.quote("Verspätete Antwort")) }
+        assertEquals(1, callbacks); assertEquals("Letzter bestätigter Text", controller.latest)
+        assertNotNull(controller.readIssue)
+        for (invalid in listOf("null", "42", "{}")) {
+            rule.activityRule.scenario.onActivity {
+                EditorController { _, callback -> callback(invalid) }.apply { ready = true; latest = "Bleibt" }.read { assertFalse(it.confirmed); assertEquals("Bleibt", it.markdown) }
+            }
+        }
+    }
+
+    @Test fun snapshotsAndPickerCheckpointPreserveRawWordsAndRejectOldDraftResponses() {
+        fixture()
+        val store = ViewModelStore(); lateinit var fresh: DiaryViewModel
+        rule.activityRule.scenario.onActivity { fresh = DiaryViewModel(app); store.put("snapshot-review", fresh) }
+        rule.waitUntil(20000) { fresh.state.value.loaded && !fresh.state.value.busy }
+        val draft = Entry(); val raw = "    erste Zeile\n    zweite Zeile  \n"
+        var pickerCheckpoint = false
+        rule.activityRule.scenario.onActivity {
+            fresh.openEditor(draft)
+            fresh.persistEditorSnapshot(draft.id, "", raw)
+            fresh.flushDraft(draft.id) { pickerCheckpoint = diary.draft()?.markdown == raw }
+        }
+        rule.waitUntil(20000) { pickerCheckpoint }
+        rule.activityRule.scenario.onActivity {
+            fresh.updateDraftText(draft.id, raw + "Neuere Worte")
+            fresh.persistEditorSnapshot(draft.id, raw, "Veraltete Antwort")
+            fresh.persistEditorSnapshot(Entry().id, "", "Falscher Entwurf")
+        }
+        rule.waitUntil(20000) { diary.draft()?.markdown == raw + "Neuere Worte" }
+        rule.activityRule.scenario.onActivity { fresh.saveDraft(raw) }
+        rule.waitUntil(20000) { diary.entries().any { it.id == draft.id } }
+        assertEquals(raw, diary.entries().single { it.id == draft.id }.markdown)
+        store.clear()
+    }
+
+    @Test fun rotationPreservesEncryptionIntentAndRequiresPasswordsAgain() {
+        fixture()
+        rule.onNodeWithText("Optionen").performClick()
+        rule.onNodeWithText("ZIP-Backup erstellen").performScrollTo().performClick()
+        val checkbox = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Checkbox)
+        rule.onNode(checkbox).performClick()
+        rule.onAllNodes(hasSetTextAction())[0].performTextInput("Verschlüsselt")
+        rule.onAllNodes(hasSetTextAction())[1].performTextInput("Verschlüsselt")
+        rule.onNodeWithText("ZIP erstellen").assertIsEnabled()
+        rule.activityRule.scenario.recreate(); rule.waitForIdle()
+        rule.onNode(checkbox).assertIsOn()
+        rule.onNodeWithText("ZIP erstellen").assertIsNotEnabled()
+        rule.onNodeWithText("ZIP-Datei direkt speichern").assertIsNotEnabled()
     }
 
     @Test fun unchangedEditingIsDiscardedAndNewEntryNeverSilentlyOverwritesEditingDraft() {

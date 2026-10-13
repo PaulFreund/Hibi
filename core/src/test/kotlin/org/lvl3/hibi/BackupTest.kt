@@ -73,6 +73,23 @@ class BackupTest {
         reject(zip)
     }
 
+    @Test fun correctlyHashedInvalidUtf8MarkdownIsRejectedBeforeImport() {
+        val zip = export(listOf(Entry(markdown = "Gültiger Text")))
+        val invalid = byteArrayOf(0xff.toByte())
+        val value = manifest(zip); val record = value.entries.single()
+        replace(zip, record.markdownFile, invalid)
+        replace(zip, "manifest.json", diaryJson.encodeToString(value.copy(entries = listOf(record.copy(markdownSha256 = sha256(invalid))))).toByteArray())
+        reject(zip)
+    }
+
+    @Test fun invalidUtf8InIgnoredManifestFieldIsRejectedRatherThanReplaced() {
+        val zip = export(listOf(Entry(markdown = "Gültig 🌿")))
+        val bytes = diaryJson.encodeToString(manifest(zip)).toByteArray()
+        val invalid = "{\"ignored\":\"".toByteArray() + byteArrayOf(0xff.toByte()) + "\",".toByteArray() + bytes.copyOfRange(1, bytes.size)
+        replace(zip, "manifest.json", invalid)
+        reject(zip)
+    }
+
     @Test fun changedImageFailsDigestBeforeImport() {
         val zip = export(listOf(Entry(photos = listOf(photo(byteArrayOf(1, 2, 3))))))
         replace(zip, manifest(zip).entries.single().photos.single().file, byteArrayOf(9, 9, 9))

@@ -14,6 +14,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -100,7 +101,7 @@ private fun PasswordField(value: String, set: (String) -> Unit, label: String) {
 
 @Composable
 fun ExportPasswordDialog(close: () -> Unit, create: (String) -> Unit, save: (String) -> Unit) {
-    var encrypted by remember { mutableStateOf(false) }
+    var encrypted by rememberSaveable { mutableStateOf(false) }
     var password by remember { mutableStateOf("") }
     var repeat by remember { mutableStateOf("") }
     AlertDialog(onDismissRequest = close, title = { Text("ZIP-Backup erstellen") }, text = {

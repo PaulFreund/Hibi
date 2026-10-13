@@ -55,6 +55,24 @@ class StorageTest {
         assertEquals(photo.sha256, sha256(diary.mediaFile(photo)))
     }
 
+    @Test fun largeEscapedDraftAndPublishedTextRemainReadableAndRoundTrip() {
+        val context = context(); val diary = LocalDiary(context)
+        // Draft JSON exceeds CursorWindow; UTF-8 slices must also preserve Unicode and NUL.
+        val text = "a\n".repeat(1_048_570) + "🌿\u0000Ende"
+        val entry = Entry(markdown = text)
+        diary.setDraft(entry)
+        assertEquals(entry, LocalDiary(context).draft())
+        diary.save(entry)
+        assertEquals(entry, LocalDiary(context).entries().single())
+        val archive = File(context.cacheDir, "large-text.zip")
+        ZipBackup().export(archive, diary.entries(), Preferences(), diary::mediaFile)
+        val target = LocalDiary(context())
+        ZipBackup().prepare(archive, File(context.cacheDir, "large-stage")).use {
+            target.import(it)
+            assertEquals(entry, target.entries().single())
+        }
+    }
+
     @Test fun encryptedBackupRestoresOriginalExifAndIsIdempotentWithoutOverwritingLocalChanges() {
         val sourceContext = context(); val source = LocalDiary(sourceContext)
         val original = picture(sourceContext, rotate = true)

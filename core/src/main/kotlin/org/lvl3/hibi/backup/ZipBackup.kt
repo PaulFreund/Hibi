@@ -17,6 +17,9 @@ import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.Files
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.CharacterCodingException
 
 @Serializable
 data class BackupManifest(
@@ -178,7 +181,7 @@ class ZipBackup {
                 val manifestHeader = files["manifest.json"] ?: error("Hibi-Manifest fehlt")
                 val manifestBytes = zip.getInputStream(manifestHeader).use { readLimited(it, 8 * 1024 * 1024) }
                 progress(ArchiveProgress(++completed, files.size))
-                val manifest = diaryJson.decodeFromString<BackupManifest>(manifestBytes.toString(Charsets.UTF_8))
+                val manifest = diaryJson.decodeFromString<BackupManifest>(strictUtf8(manifestBytes, "Backup-Verzeichnis"))
                 require(manifest.format == "hibi" && manifest.version == 1) { "Nicht unterstütztes Backup-Format" }
                 require(manifest.entries.size <= 20000 && manifest.exportedAt >= 0) { "Ungültiges Backup" }
                 require(manifest.entries.map { it.id }.distinct().size == manifest.entries.size) { "Doppelte Eintrags-IDs" }
@@ -197,7 +200,7 @@ class ZipBackup {
                     actualTotal += text.size
                     require(sha256(text) == record.markdownSha256) { "Textdatei ist beschädigt" }
                     val entry = Entry(record.id, record.day, record.createdAt, record.updatedAt,
-                        text.toString(Charsets.UTF_8), record.photos.map { it.photo })
+                        strictUtf8(text, "Textdatei"), record.photos.map { it.photo })
                     validate(entry)
                     record.photos.forEach { item ->
                         require(photoIds.add(item.photo.id)) { "Doppelte Bild-ID im Backup" }
@@ -232,6 +235,13 @@ class ZipBackup {
             if (error is ZipException) throw IllegalArgumentException("ZIP lässt sich nicht öffnen. Prüfe Archiv und Passwort.", error)
             throw error
         }
+    }
+
+    private fun strictUtf8(bytes: ByteArray, label: String): String = try {
+        Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
+    } catch (error: CharacterCodingException) {
+        throw IllegalArgumentException("$label enthält ungültiges UTF-8", error)
     }
 
     private fun readLimited(input: InputStream, maximum: Int): ByteArray {

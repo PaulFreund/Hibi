@@ -44,6 +44,10 @@ Speichertests verwenden eigene Datenbanken. Die UI-Tests verlangen einen Emulato
 
 Gestaltungsänderungen benötigen keine Datenmigration. Änderungen am SQLite-Schema erfordern eine explizite Migration in `LocalDiary.Database`; Änderungen am Backup-Vertrag eine neue unterstützte Formatversion. Bestehende Daten werden nicht durch eine automatische Neuerstellung der Datenbank ersetzt.
 
+Große Texte und Entwurf-JSON werden in begrenzten Byteabschnitten aus SQLite gelesen, damit die dokumentierten 2 MiB Markdown auch nach einem Neustart lesbar bleiben. Die bisherigen Tabellen und Daten bleiben verwendbar. Markdown wird beim Veröffentlichen unverändert übernommen; Einrückung und abschließende Leerzeichen bzw. Zeilenumbrüche bleiben erhalten.
+
+Speichern und Schließen benötigen einen bestätigten Text aus dem Schreibbereich. Bei einem Lesefehler bleibt der Editor offen und bietet Wiederholung an. Entwurf-Checkpoints sichern Änderungen bei App-Wechseln und vor der Fotoauswahl; die Auswahl öffnet erst nach abgeschlossener Entwurfspersistierung. Nach Rotation bleibt die gewählte ZIP-Verschlüsselung erhalten, Passwörter müssen erneut eingegeben werden.
+
 ## Backup-Verhalten
 
 In den Einstellungen den ZIP-Export öffnen und optional ein Passwort vergeben. **ZIP-Datei direkt speichern** schreibt ohne lokale ZIP-Kopie in das gewählte Dateiziel. **ZIP erstellen** erzeugt eine einzelne temporäre ZIP zum anschließenden Teilen. OneDrive, Google Drive oder eine andere Ziel-App übernimmt den Upload und ihre WLAN-/Mobilfunkeinstellungen. Hibi zeigt **Letzter Export** und bestätigt keinen Cloud-Upload. Nach einer Neuinstallation **ZIP-Backup importieren** wählen.

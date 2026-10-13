@@ -16,6 +16,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import org.lvl3.hibi.model.Entry
 import org.lvl3.hibi.model.PictureFormat
 import org.lvl3.hibi.ui.theme.HibiDesign
@@ -32,10 +35,27 @@ fun EditorScreen(draft: Entry, vm: DiaryViewModel, modifier: Modifier, pickPhoto
     var datePicker by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var discard by remember { mutableStateOf(false) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(controller, lifecycle, draft.id) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                val base = vm.state.value.draft?.takeIf { it.id == draft.id }?.markdown ?: return@LifecycleEventObserver
+                controller.read { result -> vm.persistEditorSnapshot(draft.id, base, result.markdown) }
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
     fun read(action: (String) -> Unit) {
         if (reading || state.busy) return
         reading = true
-        controller.read { text -> reading = false; if (vm.state.value.draft?.id == draft.id) action(text) }
+        controller.read { result ->
+            reading = false
+            if (vm.state.value.draft?.id == draft.id) {
+                if (result.confirmed) action(result.markdown)
+                else { vm.flushDraft(draft.id); vm.message("Der aktuelle Text ist noch nicht bestätigt. Bitte wiederholen.") }
+            }
+        }
     }
     fun close() { read { text -> vm.updateDraft { it.copy(markdown = text) }; vm.closeEditor() } }
     BackHandler { if (!state.busy) close() }
@@ -82,13 +102,14 @@ fun EditorScreen(draft: Entry, vm: DiaryViewModel, modifier: Modifier, pickPhoto
                     }
                 }
             item(key = "add-photo") {
-                OutlinedButton(onClick = pickPhotos, enabled = !state.busy, modifier = Modifier.height(if (draft.photos.isEmpty()) 44.dp else 80.dp)) {
+                OutlinedButton(onClick = { read { text -> vm.updateDraftText(draft.id, text); vm.flushDraft(draft.id, pickPhotos) } }, enabled = !state.busy && !reading, modifier = Modifier.height(if (draft.photos.isEmpty()) 44.dp else 80.dp)) {
                     Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(6.dp)); Text("Fotos hinzufügen")
                 }
             }
         }
         if (!controller.ready && controller.failure == null) Text("Schreibbereich wird geladen · Entwurf bleibt erhalten", Modifier.padding(horizontal = HibiDesign.pagePadding), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        MarkdownEditor(draft.id, draft.markdown, controller, Modifier.fillMaxWidth().weight(1f)) { text -> vm.updateDraft { it.copy(markdown = text) } }
+        controller.readIssue?.let { Text(it, Modifier.padding(horizontal = HibiDesign.pagePadding), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        MarkdownEditor(draft.id, draft.markdown, controller, Modifier.fillMaxWidth().weight(1f), checkpoint = { base, text -> vm.persistEditorSnapshot(draft.id, base, text) }) { text -> vm.updateDraftText(draft.id, text) }
     }
     if (datePicker) {
         val picker = rememberDatePickerState(initialSelectedDateMillis = LocalDate.parse(draft.day).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(), yearRange = 1..9999)

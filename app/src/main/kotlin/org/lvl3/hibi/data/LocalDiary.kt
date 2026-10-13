@@ -13,6 +13,7 @@ import org.lvl3.hibi.backup.PreparedImport
 import org.lvl3.hibi.model.*
 import java.io.File
 import java.io.FileOutputStream
+import java.io.ByteArrayOutputStream
 import java.util.UUID
 
 /** Versioned SQLite schema and immutable original media. UI only consumes domain objects. */
@@ -31,13 +32,14 @@ class LocalDiary(private val context: Context) : DiaryRepository {
                     Photo(text("id"), text("extension"), text("mime"), number("width"), number("height"), text("sha256")))
             }
         }
-        return db.query("entries", null, null, null, null, null, "day ASC, created_at ASC, id ASC").use { cursor ->
+        // Keep CursorWindow rows small, including for existing 2-MiB texts.
+        return db.query("entries", arrayOf("id", "day", "created_at", "updated_at"), null, null, null, null, "day ASC, created_at ASC, id ASC").use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
                     fun text(name: String) = cursor.getString(cursor.getColumnIndexOrThrow(name))
                     fun number(name: String) = cursor.getLong(cursor.getColumnIndexOrThrow(name))
                     val id = text("id")
-                    add(Entry(id, text("day"), number("created_at"), number("updated_at"), text("markdown"), photos[id].orEmpty()))
+                    add(Entry(id, text("day"), number("created_at"), number("updated_at"), readText("entries", "markdown", "id", id).orEmpty(), photos[id].orEmpty()))
                 }
             }
         }
@@ -186,8 +188,21 @@ class LocalDiary(private val context: Context) : DiaryRepository {
         media.listFiles()?.filter { it.name !in used && !it.name.endsWith(".part") }?.forEach { it.delete() }
     }
 
-    private fun setting(key: String): String? = db.query("settings", arrayOf("value"), "key=?", arrayOf(key), null, null, null).use {
-        if (it.moveToFirst()) it.getString(0) else null
+    private fun setting(key: String): String? = readText("settings", "value", "key", key)
+
+    /** Read bounded byte slices, then decode together; this also preserves embedded NULs. */
+    private fun readText(table: String, column: String, keyColumn: String, key: String): String? {
+        val size = 64 * 1024
+        val result = ByteArrayOutputStream()
+        var start = 1
+        while (true) {
+            val part = db.rawQuery("SELECT substr(CAST($column AS BLOB), ?, ?) FROM $table WHERE $keyColumn=?", arrayOf(start.toString(), size.toString(), key)).use {
+                if (it.moveToFirst()) it.getBlob(0) else null
+            } ?: return null
+            if (part.isEmpty()) return result.toString(Charsets.UTF_8.name())
+            result.write(part)
+            start += size
+        }
     }
     private fun setSetting(key: String, value: String) {
         db.insertWithOnConflict("settings", null, ContentValues().apply { put("key", key); put("value", value) }, SQLiteDatabase.CONFLICT_REPLACE)
