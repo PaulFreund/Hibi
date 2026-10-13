@@ -44,4 +44,17 @@ class RendererHandoffTest {
         handoff.release(next); finish!!()
         assertNull(handoff.current); assertFalse(handoff.waiting)
     }
+
+    @Test fun terminatedRendererAndLateCompletionCannotStartACachedSuccessor() {
+        var finish: (() -> Unit)? = null
+        val handoff = RendererHandoff<Any> { _, done -> finish = done }
+        val first = Any(); val pending = Any(); val confirmedRecovery = Any()
+        handoff.attach(first) {}
+        handoff.attach(pending) { fail("An unconfirmed cached successor must not activate") }
+        handoff.forget(first)
+        assertNull(handoff.current); assertFalse(handoff.waiting)
+        handoff.attach(confirmedRecovery) {}
+        finish!!()
+        assertSame(confirmedRecovery, handoff.current)
+    }
 }

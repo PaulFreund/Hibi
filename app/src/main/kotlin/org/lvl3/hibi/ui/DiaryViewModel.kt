@@ -43,9 +43,10 @@ class DiaryViewModel(application: Application, private val saved: SavedStateHand
     private val backup = ZipBackup()
     private var draftJob: Job? = null
     private var editor: Pair<String, EditorController>? = null
+    fun activeEditorController(): EditorController? = editor?.takeIf { it.first == mutable.value.draft?.id }?.second
     fun editorController(id: String): EditorController {
         val current = editor?.takeIf { it.first == id }?.second
-        return (current ?: EditorController().also { editor = id to it }).also {
+        return (current ?: EditorController().also { editor?.second?.dispose(); editor = id to it }).also {
             if (it.webView == null && !it.switching) it.latest = mutable.value.draft?.takeIf { draft -> draft.id == id }?.markdown.orEmpty()
         }
     }
@@ -301,6 +302,7 @@ class DiaryViewModel(application: Application, private val saved: SavedStateHand
     }
     override fun onCleared() {
         // Active IO owns its staging directory. Abandoned previews are reclaimed on next startup.
+        editor?.second?.dispose()
         pendingSavePassword?.fill('\u0000')
         super.onCleared()
     }

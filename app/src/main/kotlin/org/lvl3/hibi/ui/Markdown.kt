@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.TextUtils
 import android.text.method.ArrowKeyMovementMethod
+import android.view.ViewGroup
 import android.webkit.*
 import android.widget.TextView
 import androidx.compose.foundation.layout.*
@@ -35,32 +36,32 @@ class EditorController(private val evaluator: ((String, (String) -> Unit) -> Uni
     private class Renderer(val checkpoint: (String, String) -> Unit) {
         var retired = false
         var released = false
+        var wasReady = false
     }
+    private class Recovery(val view: WebView, val base: String, val done: () -> Unit) { var read = 0 }
     private val renderers = mutableMapOf<WebView, Renderer>()
+    private var recovery: Recovery? = null
     private val handoff: RendererHandoff<WebView> = RendererHandoff { outgoing, done ->
-        val base = latest
         outgoing.clearFocus()
-        readFrom(outgoing, allowSwitch = true) { result ->
-            renderers[outgoing]?.let { record ->
-                record.checkpoint(base, result.markdown)
-                record.retired = true
-            }
-            ready = false
-            cancelStartup()
-            outgoing.removeJavascriptInterface("Hibi")
-            done() // Only now may the next renderer load and initialize with latest.
-            disposeReleased(outgoing)
-            if (handoffViewAbsent()) switching = false
-        }
+        cancelStartup()
+        val pending = Recovery(outgoing, latest, done)
+        recovery = pending
+        // A renderer which never became ready could not accept edits.
+        if (!ready && renderers[outgoing]?.wasReady != true) completeRecovery(pending)
+        else requestRecovery(pending)
     }
     val webView: WebView? get() = handoff.current
     var latest = ""
     var ready by mutableStateOf(false)
     var switching by mutableStateOf(false)
         private set
-    val usable get() = ready && !switching && failure == null
+    val usable get() = ready && !switching && failure == null && recoveryIssue == null
     var failure by mutableStateOf<String?>(null)
     var readIssue by mutableStateOf<String?>(null)
+    var recoveryIssue by mutableStateOf<String?>(null)
+        private set
+    var failureDiagnostic: String? = null
+        private set
     var consoleError: String? = null
     var loadPhase = "not-created"
     var pageUrl: String? = null
@@ -97,26 +98,79 @@ class EditorController(private val evaluator: ((String, (String) -> Unit) -> Uni
         }
     }
     fun rendererReady(view: WebView) {
-        if (webView === view && failure == null) { ready = true; loadPhase = "ready"; cancelStartup() }
+        if (webView === view && failure == null) { renderers[view]?.wasReady = true; ready = true; loadPhase = "ready"; cancelStartup() }
     }
     fun fail(view: WebView, message: String) {
-        if (webView === view) { ready = false; failure = message; loadPhase = "failed"; cancelStartup() }
+        if (webView === view) {
+            ready = false; failure = message; loadPhase = "failed"; cancelStartup()
+            if (failureDiagnostic == null) failureDiagnostic = diagnostics()
+        }
     }
     private fun cancelStartup() { startup?.let(handler::removeCallbacks); startup = null }
-    fun diagnostics() = "ready=$ready, switching=$switching, phase=$loadPhase, url=$pageUrl, initialize=$initializeAnswer, failure=$failure, console=$consoleError, resources=${resources.toList()}, renderer=${webView?.let(System::identityHashCode)}, latestLength=${latest.length}"
+    fun diagnostics() = "ready=$ready, switching=$switching, phase=$loadPhase, url=$pageUrl, initialize=$initializeAnswer, failure=$failure, recovery=$recoveryIssue, console=$consoleError, resources=${resources.toList()}, renderer=${webView?.let(System::identityHashCode)}, latestLength=${latest.length}"
+    private fun requestRecovery(pending: Recovery) {
+        val request = ++pending.read
+        readFrom(pending.view, allowSwitch = true, valid = { recovery === pending && pending.read == request }) { result ->
+            if (recovery !== pending || pending.read != request) return@readFrom
+            if (result.confirmed) completeRecovery(pending)
+            else {
+                recoveryIssue = "Der letzte Text konnte beim Wechsel des Schreibbereichs noch nicht bestätigt werden. Speichern bleibt gesperrt."
+                readIssue = recoveryIssue
+            }
+        }
+    }
+    private fun completeRecovery(pending: Recovery) {
+        if (recovery !== pending) return
+        recovery = null
+        renderers[pending.view]?.let { record -> record.checkpoint(pending.base, latest); record.retired = true }
+        ready = false; recoveryIssue = null; readIssue = null
+        pending.view.removeJavascriptInterface("Hibi")
+        pending.done()
+        disposeReleased(pending.view)
+        if (handoffViewAbsent()) switching = false
+    }
+    fun retryRecovery() { recovery?.let(::requestRecovery) }
+    val canRetryRecovery get() = recovery != null
+    /** Called only after the user confirms that unreceived words may be missing. */
+    fun useStoredDraft() {
+        val pending = recovery
+        if (pending != null) completeRecovery(pending)
+        else if (recoveryIssue != null) { recoveryIssue = null; failure = null; readIssue = null; generation++ }
+    }
+    fun rendererChanged(view: WebView, value: String, changed: (String) -> Unit) {
+        if (webView !== view || !ready) return
+        latest = value; changed(value)
+        recovery?.takeIf { it.view === view }?.let(::completeRecovery)
+    }
+    fun rendererGone(view: WebView) {
+        if (webView === view) {
+            fail(view, "Der Schreibbereich wurde beendet.")
+            recovery = null; handoff.forget(view); switching = false
+            recoveryIssue = "Der Schreibbereich wurde beendet. Noch nicht übermittelte Worte konnten nicht bestätigt werden. Speichern bleibt gesperrt."
+            readIssue = recoveryIssue
+        } else handoff.forget(view)
+        renderers.remove(view)
+        (view.parent as? ViewGroup)?.removeView(view)
+        view.removeJavascriptInterface("Hibi"); view.destroy()
+    }
     fun read(callback: (EditorRead) -> Unit) {
         if (!usable) { callback(EditorRead(latest, false)); return }
-        readFrom(webView, allowSwitch = false, callback)
+        readFrom(webView, allowSwitch = false, callback = callback)
     }
-    private fun readFrom(view: WebView?, allowSwitch: Boolean, callback: (EditorRead) -> Unit) {
+    private fun readFrom(view: WebView?, allowSwitch: Boolean, valid: () -> Boolean = { true }, callback: (EditorRead) -> Unit) {
         if (!ready || (view == null && evaluator == null)) { callback(EditorRead(latest, false)); return }
         var completed = false
+        var warned = false
         fun finish(value: String?) {
-            if (completed) return
-            completed = true
+            if (completed || !valid()) return
             val confirmed = value != null && webView === view && ready && (allowSwitch || !switching)
+            completed = confirmed || !allowSwitch
             if (confirmed) { latest = value!!; readIssue = null }
-            else if (webView === view && !allowSwitch) readIssue = "Der aktuelle Text konnte nicht bestätigt werden. Bitte versuche es erneut."
+            else {
+                if (webView === view && !allowSwitch) readIssue = "Der aktuelle Text konnte nicht bestätigt werden. Bitte versuche es erneut."
+                if (warned) return
+                warned = true
+            }
             callback(EditorRead(latest, confirmed))
         }
         val timeout = Runnable { finish(null) }
@@ -132,7 +186,15 @@ class EditorController(private val evaluator: ((String, (String) -> Unit) -> Uni
             handler.removeCallbacks(timeout); finish(null)
         }
     }
-    fun retry() { cancelStartup(); ready = false; failure = null; readIssue = null; generation++ }
+    fun retry() {
+        if (recovery != null) { retryRecovery(); return }
+        cancelStartup(); ready = false; failure = null; readIssue = null; generation++
+    }
+    fun dispose() {
+        cancelStartup(); recovery = null; ready = false
+        renderers.keys.toList().forEach { (it.parent as? ViewGroup)?.removeView(it); it.removeJavascriptInterface("Hibi"); it.destroy() }
+        renderers.clear()
+    }
 }
 
 class EditorBridge(private val changed: (String) -> Unit, private val ready: () -> Unit, private val failed: (String) -> Unit) {
@@ -148,6 +210,23 @@ fun MarkdownEditor(id: String, initial: String, controller: EditorController, mo
     val context = LocalContext.current
     val fontScale = LocalConfiguration.current.fontScale
     val callback by rememberUpdatedState(changed)
+    var useStored by remember { mutableStateOf(false) }
+    val recoveryIssue = controller.recoveryIssue
+    if (recoveryIssue != null) {
+        Column(modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(recoveryIssue)
+            if (controller.canRetryRecovery) {
+                Text("Der bisherige Schreibbereich bleibt für eine erneute Textübernahme erhalten.")
+                OutlinedButton(onClick = controller::retryRecovery) { Text("Text erneut übernehmen") }
+            }
+            TextButton(onClick = { useStored = true }) { Text("Gesicherten Entwurf verwenden …") }
+        }
+        if (useStored) AlertDialog(onDismissRequest = { useStored = false }, title = { Text("Gesicherten Entwurf verwenden?") },
+            text = { Text("Worte, die der bisherige Schreibbereich noch nicht übermittelt hat, können fehlen. Nur der bereits gesicherte Text wird weiterbearbeitet.") },
+            confirmButton = { TextButton(onClick = { useStored = false; controller.useStoredDraft() }) { Text("Gesicherten Text verwenden") } },
+            dismissButton = { TextButton(onClick = { useStored = false }) { Text("Weiter versuchen") } })
+        return
+    }
     val failure = controller.failure
     if (failure != null) {
         Column(modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -177,7 +256,7 @@ fun MarkdownEditor(id: String, initial: String, controller: EditorController, mo
                 }
                 fun fail(message: String) = controller.fail(owner, message)
                 addJavascriptInterface(EditorBridge(
-                    changed = { value -> if (controller.webView === owner && controller.ready) { controller.latest = value; callback(value) } },
+                    changed = { value -> controller.rendererChanged(owner, value, callback) },
                     ready = { controller.rendererReady(owner) }, failed = ::fail), "Hibi")
                 webViewClient = object : WebViewClient() {
                     override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse {
@@ -213,8 +292,8 @@ fun MarkdownEditor(id: String, initial: String, controller: EditorController, mo
                         controller.resources.add("http:${request?.url?.lastPathSegment}:${response?.statusCode}")
                     }
                     override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
-                        fail("Der Schreibbereich wurde beendet. Bitte lade ihn erneut.")
-                        return true // Compose removes the failed AndroidView and destroys it below.
+                        controller.rendererGone(owner)
+                        return true
                     }
                 }
                 controller.attach(this, checkpoint) { loadUrl("https://appassets.androidplatform.net/assets/editor/editor.html") }

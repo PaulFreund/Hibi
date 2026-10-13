@@ -85,7 +85,7 @@ class UiTest {
         var controller: EditorController? = null
         rule.activityRule.scenario.onActivity { activity ->
             val view = web(activity.window.decorView)
-            controller = view?.tag as? EditorController
+            controller = ViewModelProvider(activity)[DiaryViewModel::class.java].activeEditorController()
             if (view == null) completed.countDown() else view.evaluateJavascript(expression) { value -> result = value; completed.countDown() }
         }
         val answered = completed.await(8, TimeUnit.SECONDS)
@@ -95,15 +95,15 @@ class UiTest {
     }
     private fun editorReady(): Boolean {
         var ready = false
-        rule.activityRule.scenario.onActivity { activity -> ready = (web(activity.window.decorView)?.tag as? EditorController)?.usable == true }
+        rule.activityRule.scenario.onActivity { activity -> ready = ViewModelProvider(activity)[DiaryViewModel::class.java].activeEditorController()?.usable == true }
         return ready
     }
     private fun editorDiagnostics(): String {
         var value = "No WebView"
         rule.activityRule.scenario.onActivity { activity ->
             val view = web(activity.window.decorView)
-            val controller = view?.tag as? EditorController
-            value = "${controller?.diagnostics()}, actualUrl=${view?.url}, provider=${WebView.getCurrentWebViewPackage()?.versionName}"
+            val controller = ViewModelProvider(activity)[DiaryViewModel::class.java].activeEditorController()
+            value = "${controller?.diagnostics()}, firstFailure=${controller?.failureDiagnostic}, actualUrl=${view?.url}, provider=${WebView.getCurrentWebViewPackage()?.versionName}"
         }
         return value
     }
@@ -282,6 +282,103 @@ class UiTest {
             answer!!.invoke(JSONObject.quote("Old late response"))
             assertEquals("ABC", draft); assertEquals("ABC", controller.latest)
             controller.ready = false; controller.release(next)
+        }
+    }
+
+    @Test fun unconfirmedHandoffKeepsOldRendererAndLateReadOrCheckpointRecoversWords() {
+        for (kind in listOf("missing", "late", "invalid", "checkpoint")) {
+            val answers = mutableListOf<(String) -> Unit>()
+            lateinit var controller: EditorController; lateinit var old: WebView; lateinit var next: WebView
+            var draft = "A"; var initialized: String? = null
+            rule.activityRule.scenario.onActivity { activity ->
+                controller = EditorController { _, callback -> answers.add(callback) }.apply { latest = "A" }
+                old = WebView(activity); next = WebView(activity)
+                controller.attach(old, { base, text -> if (draft == base) draft = text }) { controller.rendererReady(old) }
+                controller.release(old)
+                controller.attach(next, { _, _ -> }) { initialized = controller.latest; controller.rendererReady(next) }
+                if (kind == "invalid") answers.single().invoke("null")
+            }
+            rule.waitUntil(5000) { controller.recoveryIssue != null }
+            rule.activityRule.scenario.onActivity {
+                assertFalse(controller.usable); assertNull(initialized); assertSame(old, controller.webView)
+                var read: EditorRead? = null; controller.read { read = it }
+                assertFalse(read!!.confirmed); assertEquals("A", draft)
+                when (kind) {
+                    "missing" -> { controller.retryRecovery(); answers.last().invoke(JSONObject.quote("AB")) }
+                    "checkpoint" -> controller.rendererChanged(old, "AB") { draft = it }
+                    else -> answers.first().invoke(JSONObject.quote("AB"))
+                }
+                assertEquals("AB", initialized); assertEquals("AB", draft); assertTrue(controller.usable)
+                controller.rendererChanged(next, "ABC") { draft = it }
+                answers.first().invoke(JSONObject.quote("Old read"))
+                controller.rendererChanged(old, "Old checkpoint") { draft = it }
+                assertEquals("ABC", controller.latest); assertEquals("ABC", draft)
+                controller.dispose()
+            }
+        }
+    }
+
+    @Test fun retriedHandoffRejectsSupersededReadAndCachedRecoveryIsExplicit() {
+        val answers = mutableListOf<(String) -> Unit>()
+        lateinit var controller: EditorController; lateinit var old: WebView; lateinit var next: WebView
+        var initialized: String? = null
+        rule.activityRule.scenario.onActivity { activity ->
+            controller = EditorController { _, callback -> answers.add(callback) }.apply { latest = "A" }
+            old = WebView(activity); next = WebView(activity)
+            controller.attach(old, { _, _ -> }) { controller.rendererReady(old) }
+            controller.release(old)
+            controller.attach(next, { _, _ -> }) { initialized = controller.latest; controller.rendererReady(next) }
+        }
+        rule.waitUntil(5000) { controller.recoveryIssue != null }
+        rule.activityRule.scenario.onActivity {
+            controller.retryRecovery(); answers.first().invoke(JSONObject.quote("Superseded read"))
+            assertEquals("A", controller.latest); assertNull(initialized); assertFalse(controller.usable)
+            // Equivalent to the separate, explicitly confirmed cached-draft action in the UI.
+            controller.useStoredDraft()
+            assertEquals("A", initialized); assertTrue(controller.usable)
+            controller.rendererChanged(next, "ABC") {}
+            answers.last().invoke(JSONObject.quote("Old retry"))
+            assertEquals("ABC", controller.latest)
+            controller.dispose()
+        }
+    }
+
+    @Test fun failureDiagnosticsRemainAvailableAfterErrorScreenRemovesWebView() {
+        fixture(); rule.onNodeWithText("Eintrag").performClick()
+        rule.waitUntil(10000) { var exists = false; rule.activityRule.scenario.onActivity { exists = web(it.window.decorView) != null }; exists }
+        var snapshot: String? = null
+        rule.activityRule.scenario.onActivity { activity ->
+            val controller = ViewModelProvider(activity)[DiaryViewModel::class.java].activeEditorController()!!
+            controller.pageUrl = "https://appassets.androidplatform.net/assets/editor/editor.html"
+            controller.initializeAnswer = "false"; controller.resources.add("diagnostic-fixture.js")
+            controller.fail(controller.webView!!, "Absichtlicher Initialisierungsfehler")
+            snapshot = controller.failureDiagnostic
+        }
+        rule.waitUntil(10000) { var absent = false; rule.activityRule.scenario.onActivity { absent = web(it.window.decorView) == null }; absent }
+        val diagnostic = editorDiagnostics()
+        assertTrue(diagnostic.contains("Absichtlicher Initialisierungsfehler"))
+        assertTrue(diagnostic.contains("initialize=false")); assertTrue(diagnostic.contains("diagnostic-fixture.js"))
+        assertTrue(diagnostic.contains("editor.html")); assertTrue(diagnostic.contains("firstFailure=$snapshot"))
+    }
+
+    @Test fun terminatedRendererRequiresExplicitDraftRecoveryBeforeLoadingNewWebView() {
+        var answer: ((String) -> Unit)? = null; var initialized: String? = null
+        rule.activityRule.scenario.onActivity { activity ->
+            val controller = EditorController { _, callback -> answer = callback }.apply { latest = "A" }
+            val old = WebView(activity); val pending = WebView(activity)
+            controller.attach(old, { _, _ -> }) { controller.rendererReady(old) }
+            controller.release(old)
+            controller.attach(pending, { _, _ -> }) { initialized = controller.latest; controller.rendererReady(pending) }
+            controller.rendererGone(old)
+            assertNull(controller.webView); assertNull(initialized); assertFalse(controller.usable)
+            assertNotNull(controller.recoveryIssue); assertFalse(controller.canRetryRecovery)
+            answer!!.invoke(JSONObject.quote("Unconfirmed old words"))
+            assertEquals("A", controller.latest); assertNull(initialized)
+            controller.release(pending); controller.useStoredDraft()
+            val fresh = WebView(activity)
+            controller.attach(fresh, { _, _ -> }) { initialized = controller.latest; controller.rendererReady(fresh) }
+            assertEquals("A", initialized); assertTrue(controller.usable)
+            controller.dispose()
         }
     }
 

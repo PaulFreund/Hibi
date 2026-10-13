@@ -20,13 +20,19 @@ class RendererHandoff<T : Any>(private val retire: (T, () -> Unit) -> Unit) {
 
     fun isCurrent(owner: T) = current === owner
 
+    /** A terminated renderer cannot be queried or kept as a recovery source. */
+    fun forget(owner: T) {
+        if (desired?.first === owner) desired = null
+        if (current === owner) { current = null; waiting = false; desired = null }
+    }
+
     private fun retireCurrent() {
         if (waiting) return
         val outgoing = current ?: return
         waiting = true
         var completed = false
         retire(outgoing) {
-            if (!completed) {
+            if (!completed && current === outgoing) {
                 completed = true
                 current = null
                 waiting = false
