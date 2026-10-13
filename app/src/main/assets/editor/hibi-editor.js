@@ -1,4 +1,15 @@
 let editor, originalMarkdown='', canonicalInitial='', ready=false, changeTimer, maximumTimer;
+function sizeViewport() {
+ // Android WebView can resolve percentage/vh document heights to zero even
+ // after its measured window has a nonzero height. Keep the root definite.
+ if(window.innerHeight>0) {
+  const height=window.innerHeight+'px';
+  document.documentElement.style.height=height;
+  document.documentElement.style.setProperty('--viewport-height',height);
+ }
+}
+window.addEventListener('resize',sizeViewport);
+window.visualViewport?.addEventListener('resize',sizeViewport);
 function currentMarkdown() {
  if(!ready || !editor) return null;
  const value=editor.getMarkdown();
@@ -13,6 +24,7 @@ function reportChange() {
 }
 window.initialize=function(markdown,colors) {
  try {
+  sizeViewport();
   ready=false; originalMarkdown=markdown;
   for(const [key,value] of Object.entries(colors)) document.documentElement.style.setProperty('--'+key,value);
   editor=new toastui.Editor({el:document.getElementById('editor'),initialValue:markdown,initialEditType:'wysiwyg',hideModeSwitch:true,language:'de-DE',height:'100%',minHeight:'0px',autofocus:false,usageStatistics:false,placeholder:'Was möchtest du festhalten?',toolbarItems:[['heading','bold','italic','strike'],['quote','ul','ol','task'],['link']],events:{change(){if(ready){clearTimeout(changeTimer);changeTimer=setTimeout(reportChange,300);if(maximumTimer===undefined)maximumTimer=setTimeout(reportChange,1000);}}}});

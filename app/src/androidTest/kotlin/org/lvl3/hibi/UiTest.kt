@@ -113,6 +113,7 @@ class UiTest {
         catch (error: Throwable) { throw AssertionError("Native readiness failed: ${editorDiagnostics()}", error) }
         try { assertEquals("true", javascript("typeof editor !== 'undefined' && !!editor")) }
         catch (error: Throwable) { throw AssertionError("Engine query after native readiness failed: ${editorDiagnostics()}", error) }
+        assertEquals("The ready editor must have a visible writing area and toolbar", "true", javascript("(()=>{const root=document.documentElement.getBoundingClientRect();const main=document.querySelector('.toastui-editor-main').getBoundingClientRect();const bar=document.querySelector('.toastui-editor-toolbar').getBoundingClientRect();return root.height>0&&main.height>0&&bar.height>0&&bar.bottom<=innerHeight+1;})()"))
     }
     private fun tapEditorButton(selector: String) {
         val bounds = JSONArray(javascript("(()=>{const b=document.querySelector(${JSONObject.quote(selector)});const r=b.getBoundingClientRect();return [innerWidth,r.x+r.width/2,r.y+r.height/2];})()"))
@@ -167,6 +168,11 @@ class UiTest {
         rule.onNodeWithText("Eintrag").performClick()
         rule.activityRule.scenario.onActivity { ViewModelProvider(it)[DiaryViewModel::class.java].updateDraft { draft -> draft.copy(day = LocalDate.now().plusDays(1).toString()) } }
         waitForEditor()
+        if (javascript("(()=>{const b=document.querySelector('button.more');return !!b&&b.getBoundingClientRect().width>0;})()") == "true") {
+            tapEditorButton("button.more")
+            assertEquals("The formatting overflow must be visible above the toolbar", "true", javascript("(()=>{const menu=document.querySelector('.toastui-editor-dropdown-toolbar');const r=menu.getBoundingClientRect();const bar=document.querySelector('.toastui-editor-defaultUI-toolbar').getBoundingClientRect();return r.height>=48&&r.top>=0&&r.bottom<=bar.top+1&&[...menu.querySelectorAll('button')].every(b=>{const q=b.getBoundingClientRect();return document.elementFromPoint(q.x+q.width/2,q.y+q.height/2)===b;});})()"))
+            tapEditorButton("button.more")
+        }
         rule.activityRule.scenario.onActivity { activity -> web(activity.window.decorView)!!.requestFocus() }
         javascript("editor.focus();true")
         tapEditorButton(".toastui-editor-defaultUI-toolbar button.bold")
