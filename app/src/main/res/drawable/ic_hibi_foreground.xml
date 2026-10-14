@@ -1,4 +1,7 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:strokeColor="@color/hibi_surface" android:strokeWidth="5" android:strokeLineCap="round" android:fillColor="@android:color/transparent" android:pathData="M34,34v40 M74,34v40 M34,54h40" />
-    <path android:fillColor="@color/hibi_accent_soft" android:pathData="M50,27a4,4 0,1 0,8 0a4,4 0,1 0,-8 0" />
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="@color/hibi_surface" android:pathData="M54,43 C47,37 38,35 28,37 L28,73 C39,71 46,74 54,80 Z" />
+    <path android:fillColor="@color/hibi_accent_soft" android:pathData="M54,43 C61,37 70,35 80,37 L80,73 C69,71 62,74 54,80 Z" />
+    <path android:strokeColor="@color/hibi_accent" android:strokeWidth="2.4" android:strokeLineCap="round" android:fillColor="@android:color/transparent" android:pathData="M54,44v33" />
+    <path android:strokeColor="@color/hibi_accent" android:strokeAlpha="0.62" android:strokeWidth="2.1" android:strokeLineCap="round" android:fillColor="@android:color/transparent" android:pathData="M35,47 C39,47 43,49 47,51 M35,56 C39,56 43,58 47,60 M35,65 C39,65 43,67 47,69 M61,51 C65,49 69,47 73,47 M61,60 C65,58 69,56 73,56 M61,69 C65,67 69,65 73,65" />
+    <path android:fillColor="@color/hibi_surface" android:pathData="M69,25 C69.4,27.4 70.6,28.6 73,29 C70.6,29.4 69.4,30.6 69,33 C68.6,30.6 67.4,29.4 65,29 C67.4,28.6 68.6,27.4 69,25 Z" />
 </vector>
