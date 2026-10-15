@@ -5,7 +5,7 @@ plugins {
     kotlin("android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
-val signingPropertiesFile = file(System.getenv("HIBI_SIGNING_PROPERTIES") ?: "${System.getProperty("user.home")}/.ivy/secrets/Hibi/signing.properties")
+val signingPropertiesFile = file(System.getenv("HIBI_SIGNING_PROPERTIES") ?: "${System.getProperty("user.home")}/.config/hibi/signing.properties")
 val signingProperties = Properties().apply { if (signingPropertiesFile.isFile) signingPropertiesFile.inputStream().use(::load) }
 val signingReady = listOf("storeFile", "storePassword", "keyAlias", "keyPassword").all { !signingProperties.getProperty(it).isNullOrBlank() }
 android {
